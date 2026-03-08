@@ -24,3 +24,14 @@ venv/
 
 # VS Code
 .vscode/
+
+# Certificates
+*.pem
+*.crt
+*.key
+*.p12
+*.pfx
+
+# Environment / secrets
+.env
+.env.*
