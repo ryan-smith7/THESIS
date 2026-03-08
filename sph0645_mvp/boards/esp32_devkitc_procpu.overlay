@@ -1,0 +1,46 @@
+// &pinctrl {
+//     i2s0_default: i2s0_default {
+//         group1 {
+//             pinmux = <I2S0_O_WS_GPIO25>,
+//                      <I2S0_O_BCK_GPIO26>,
+//                      <I2S0_O_SD_GPIO27>;   /* TX data out — unused but needed */
+//             output-enable;
+//         };
+//         group2 {
+//             pinmux = <I2S0_I_SD_GPIO34>;   /* Mic data in */
+//             input-enable;
+//         };
+//     };
+// };
+
+// i2s_rxtx: &i2s0 {
+//     status = "okay";
+
+//     interrupts = <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>,
+//                  <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>;
+//     interrupt-names = "tx", "rx";
+// };
+
+&pinctrl {
+    i2s0_default: i2s0_default {
+        group1 {
+            pinmux = <I2S0_O_WS_GPIO25>,
+                     <I2S0_O_BCK_GPIO26>,
+                     <I2S0_O_SD_GPIO27>;   /* TX data out — loopback pin */
+            output-enable;
+        };
+        group2 {
+            pinmux = <I2S0_I_SD_GPIO27>,   /* TX→RX internal loopback — keeps BCLK alive */
+                     <I2S0_I_SD_GPIO34>;   /* Mic data in (SPH0645 DOUT) */
+            input-enable;
+        };
+    };
+};
+
+i2s_rxtx: &i2s0 {
+    status = "okay";
+
+    interrupts = <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>,
+                 <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>;
+    interrupt-names = "tx", "rx";
+};

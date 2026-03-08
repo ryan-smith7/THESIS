@@ -1,0 +1,68 @@
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/rtc.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/shell/shell.h>
+// #include "s4744413_rtc.h"
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/sensor/ens160.h>
+#include "sensor.h"
+#include "as7343.h"
+
+// MAIN.C bluetooth test
+
+#include <zephyr/types.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/net_buf.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
+
+
+#include <string.h>
+#include "bluetooth.h"
+
+#include <string.h>
+#include "bluetooth.h"
+#include "sound.h"
+#include "sound_ble.h"
+
+                /* Start immediately -> 0 (ms) */
+K_THREAD_DEFINE(tracker_tid, TRACKER_CONTROL_STACK_SIZE, tracker_thread,
+                NULL, NULL, NULL,
+                TRACKER_CONTROL_PRIORITY, 0, 0);
+
+/* Create paused -> SYS_FOREVER_MS */
+K_THREAD_DEFINE(bme280_tid,  STACK_SIZE_SENSOR, bme280_thread,
+                NULL, NULL, NULL,
+                BME280_THREAD_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(ens160_tid,  STACK_SIZE_SENSOR, ens160_thread,
+                NULL, NULL, NULL,
+                BME280_THREAD_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(moisture_tid,  STACK_SIZE_SENSOR, moisture_thread,
+                    NULL, NULL, NULL,
+                    BME280_THREAD_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(as7343_tid,  STACK_SIZE_SENSOR, as7343_thread,
+                NULL, NULL, NULL,
+                BME280_THREAD_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(combiner_tid, STACK_SIZE_SENSOR, combiner_thread,
+                NULL, NULL, NULL,
+                BME280_THREAD_PRIORITY, 0, 0);
+
+// K_THREAD_DEFINE(sound_tid, SOUND_STACK_SIZE, sound_thread,
+//                 NULL, NULL, NULL,
+//                 SOUND_PRIORITY, 0, 0);
+
+// K_THREAD_DEFINE(sound_ble_tid, SOUND_BLE_STACK_SIZE, sound_ble_thread,
+//                 NULL, NULL, NULL,
+//                 SOUND_BLE_PRIORITY, 0, 0);
+
+
+// //TESTING TASK 5
+// K_THREAD_DEFINE(file_control_id, FILE_STACK_SIZE, file_control_thread, NULL, NULL, NULL, FILE_PRIORITY, 0, 0);

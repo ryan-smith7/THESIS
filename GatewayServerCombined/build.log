@@ -1,0 +1,27 @@
+-- west build: making build dir /Users/ryan/csse4011/repo/prac2/GatewayServerCombined/build pristine
+-- west build: generating a build system
+Loading Zephyr default modules (Zephyr base).
+-- Application: /Users/ryan/csse4011/repo/prac2/GatewayServerCombined
+-- CMake version: 4.2.3
+-- Found Python3: /Users/ryan/zephyr_install/env/bin/python3 (found suitable version "3.11.7", minimum required is "3.10") found components: Interpreter
+-- Cache files will be written to: /Users/ryan/Library/Caches/zephyr
+-- Zephyr version: 4.2.99 (/Users/ryan/csse4011/zephyr)
+-- Found west (found suitable version "1.3.0", minimum required is "0.14.0")
+No board named 'esp32' found. Did you mean:
+
+yd_esp32
+esp32_cam
+esp32s3_eye
+
+Run 'west boards' for the full list.
+CMake Error at /Users/ryan/csse4011/zephyr/cmake/modules/boards.cmake:225 (message):
+  Invalid BOARD; see above.
+Call Stack (most recent call first):
+  /Users/ryan/csse4011/zephyr/cmake/modules/zephyr_default.cmake:131 (include)
+  /Users/ryan/csse4011/zephyr/share/zephyr-package/cmake/ZephyrConfig.cmake:66 (include)
+  /Users/ryan/csse4011/zephyr/share/zephyr-package/cmake/ZephyrConfig.cmake:92 (include_boilerplate)
+  CMakeLists.txt:2 (find_package)
+
+
+-- Configuring incomplete, errors occurred!
+FATAL ERROR: command exited with status 1: /opt/homebrew/bin/cmake -DWEST_PYTHON=/Users/ryan/zephyr_install/env/bin/python3 -B/Users/ryan/csse4011/repo/prac2/GatewayServerCombined/build -GNinja -DBOARD=esp32/esp32/procpu -DCONFIG_SIZE_REPORT=y -S/Users/ryan/csse4011/repo/prac2/GatewayServerCombined

@@ -1,0 +1,71 @@
+&i2c0 {
+
+    bme280@76 {
+        compatible = "bosch,bme280";
+        reg = <0x77>;
+        label = "BME280";
+    };
+
+    ens160@53 {
+        compatible = "sciosense,ens160";
+        reg = <0x53>;  /* or 0x52 depending on ADDR pin */
+        label = "ENS160";
+    };
+
+    as7343@39 {
+        compatible = "ams,as7343";
+        reg = <0x39>;
+        status = "okay";
+        label = "AS7343";
+    };
+};
+
+&pinctrl {
+    i2s0_default: i2s0_default {
+        group1 {
+            pinmux = <I2S0_O_WS_GPIO25>,
+                     <I2S0_O_BCK_GPIO26>,
+                     <I2S0_O_SD_GPIO27>;   /* TX data out — loopback pin */
+            output-enable;
+        };
+        group2 {
+            pinmux = <I2S0_I_SD_GPIO27>,   /* TX→RX internal loopback — keeps BCLK alive */
+                     <I2S0_I_SD_GPIO34>;   /* Mic data in (SPH0645 DOUT) */
+            input-enable;
+        };
+    };
+};
+
+// &pinctrl {
+//     i2s0_default: i2s0_default {
+//         group1 {
+//             pinmux = <I2S0_O_WS_GPIO25>,
+//                      <I2S0_O_BCK_GPIO26>,
+//                      <I2S0_O_SD_GPIO27>;   /* TX data out — loopback pin */
+//             output-enable;
+//         };
+//         group2 {
+//             pinmux = <I2S0_I_SD_GPIO34>;   /* Mic data in (SPH0645 DOUT) */
+//             input-enable;
+//         };
+//     };
+// };
+
+
+i2s_rxtx: &i2s0 {
+    status = "okay";
+
+    interrupts = <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>,
+                 <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>;
+    interrupt-names = "tx", "rx";
+};
+
+&adc1 {
+    status = "okay";
+};
+
+/ {
+    zephyr,user {
+        io-channels = <&adc1 7>;
+    };
+};

@@ -1,0 +1,413 @@
+{
+  "id": null,
+  "uid": "gui-prac2",
+  "title": "GUI Prac2 \u2013 Sensor Dashboard",
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "row",
+      "title": "BME280 \u2013 Environmental",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Temperature (\u00b0C)",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius"
+        }
+      },
+      "targets": [
+        {
+          "target": "BME280_Temperature"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pressure (kPa)",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pressurekpa"
+        }
+      },
+      "targets": [
+        {
+          "target": "BME280_Pressure"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Humidity (%)",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "target": "BME280_Humidity"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      }
+    },
+    {
+      "type": "row",
+      "title": "ENS160 \u2013 Air Quality",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "eCO\u2082 (ppm)",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ppm"
+        }
+      },
+      "targets": [
+        {
+          "target": "ENS160_eCO2"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "TVOC (ppb)",
+      "targets": [
+        {
+          "target": "ENS160_TVOC"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Air Quality Index",
+      "targets": [
+        {
+          "target": "ENS160_AQI"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      }
+    },
+    {
+      "type": "row",
+      "title": "AS7343 \u2013 Spectral Channels",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=405 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_405nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=425 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_425nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=450 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_450nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=475 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_475nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 27
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=515 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_515nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 27
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=550 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_550nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 27
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=555 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_555nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 35
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=600 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_600nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 35
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=640 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_640nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=690 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_690nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 43
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=745 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_745nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 43
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AS7343 \u03bb=855 nm",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "target": "AS7343_855nm"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 43
+      }
+    }
+  ],
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1s",
+      "5s",
+      "10s",
+      "30s",
+      "1m"
+    ]
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}
