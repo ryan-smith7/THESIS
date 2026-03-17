@@ -1,0 +1,20 @@
+/*
+ * esp32_poe_procpu.overlay
+ * Place this file in your application source directory:
+ *   /Users/ryan/csse4011/repo/prac2/GatewayEthernet/boards/esp32_poe_procpu.overlay
+ *
+ * Enables the onboard LAN8720 Ethernet PHY.
+ * The &eth and &mdio nodes exist in the board DTS but are disabled by default.
+ */
+
+&eth {
+    status = "okay";
+};
+
+&mdio {
+    status = "okay";
+
+    phy: ethernet-phy@0 {
+        status = "okay";
+    };
+};

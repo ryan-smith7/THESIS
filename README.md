@@ -133,6 +133,8 @@ west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/task1 
 
 west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/Gateway --pristine
 
+west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/Gateway --pristine
+
 west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/GatewayServer --pristine
 
 /Users/ryan/zephyr_install/env/bin/python3 \
@@ -157,10 +159,6 @@ west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/Gatewa
   --flash_mode dio --flash_freq 40m --flash_size 4MB \
   0x1000  /Users/ryan/csse4011/repo/prac2/task1/build/mcuboot/zephyr/zephyr.bin \
   0x20000 /Users/ryan/csse4011/repo/prac2/task1/build/task1/zephyr/zephyr.signed.bin
-
-
-
-
 
   
 /Users/ryan/zephyr_install/env/bin/python3 \
