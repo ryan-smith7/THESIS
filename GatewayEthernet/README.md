@@ -5,6 +5,11 @@ west build -b esp32_poe/esp32/procpu \
      -DDTC_OVERLAY_FILE=/Users/ryan/csse4011/repo/prac2/GatewayEthernet/boards/esp32_poe_procpu.overlay
 
 
+west build -b esp32_poe/esp32/procpu \
+  /Users/ryan/csse4011/repo/prac2/Gateway/GatewayEthernet \
+  --pristine \
+  -- -DBOARD_ROOT=/Users/ryan/csse4011 \
+     -DDTC_OVERLAY_FILE=/Users/ryan/csse4011/repo/prac2/GatewayEthernet/boards/esp32_poe_procpu.overlay
 
 
 

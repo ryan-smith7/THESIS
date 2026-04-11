@@ -1,0 +1,34 @@
+/* Disable the onboard native SDHC controller to free the label */
+&sdhc0 {
+    status = "disabled";
+};
+
+&pinctrl {
+    spim2_default: spim2_default {
+        group1 {
+            pinmux = <SPIM2_MISO_GPIO19>,
+                     <SPIM2_MOSI_GPIO23>,
+                     <SPIM2_SCLK_GPIO18>;
+        };
+    };
+};
+
+&spi2 {
+    status = "okay";
+    pinctrl-0 = <&spim2_default>;
+    pinctrl-names = "default";
+    cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+
+    sdhc_spi: sdhc@0 {
+        compatible = "zephyr,sdhc-spi-slot";
+        reg = <0>;
+        status = "okay";
+        spi-max-frequency = <24000000>;
+
+        mmc {
+            compatible = "zephyr,sdmmc-disk";
+            disk-name = "SD";
+            status = "okay";
+        };
+    };
+};

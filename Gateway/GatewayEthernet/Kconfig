@@ -1,0 +1,7 @@
+mainmenu "Gateway Ethernet Configuration"
+
+source "Kconfig.zephyr"
+
+config ETH_GATEWAY
+    bool "Use Ethernet (ESP32-POE) instead of WiFi"
+    default y
