@@ -55,13 +55,13 @@ K_THREAD_DEFINE(combiner_tid, STACK_SIZE_SENSOR, combiner_thread,
                 NULL, NULL, NULL,
                 BME280_THREAD_PRIORITY, 0, 0);
 
-// K_THREAD_DEFINE(sound_tid, SOUND_STACK_SIZE, sound_thread,
-//                 NULL, NULL, NULL,
-//                 SOUND_PRIORITY, 0, 0);
+K_THREAD_DEFINE(sound_tid, SOUND_STACK_SIZE, sound_thread,
+                NULL, NULL, NULL,
+                SOUND_PRIORITY, 0, 0);
 
-// K_THREAD_DEFINE(sound_ble_tid, SOUND_BLE_STACK_SIZE, sound_ble_thread,
-//                 NULL, NULL, NULL,
-//                 SOUND_BLE_PRIORITY, 0, 0);
+K_THREAD_DEFINE(sound_ble_tid, SOUND_BLE_STACK_SIZE, sound_ble_thread,
+                NULL, NULL, NULL,
+                SOUND_BLE_PRIORITY, 0, 0);
 
 
 // //TESTING TASK 5

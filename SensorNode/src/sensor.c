@@ -57,21 +57,11 @@ struct json_sensor_output {
     size_t values_len;
 };
 
-static const struct json_obj_descr json_descr[] = {
-    JSON_OBJ_DESCR_PRIM(struct json_sensor_output, dev_id, JSON_TOK_NUMBER),
-    JSON_OBJ_DESCR_PRIM(struct json_sensor_output, rtc_time, JSON_TOK_STRING),
-    JSON_OBJ_DESCR_ARRAY(struct json_sensor_output, values, 20, values_len, JSON_TOK_STRING),
-};
-
-/* --- Dummy timestamp --- */
-static char *get_rtc_time(void)
-{
-    static char buf[32];
-    uint64_t ms = k_uptime_get();
-    //in milleseconds currently
-    snprintf(buf, sizeof(buf), "%llu", ms);
-    return buf;
-}
+// static const struct json_obj_descr json_descr[] = {
+//     JSON_OBJ_DESCR_PRIM(struct json_sensor_output, dev_id, JSON_TOK_NUMBER),
+//     JSON_OBJ_DESCR_PRIM(struct json_sensor_output, rtc_time, JSON_TOK_STRING),
+//     JSON_OBJ_DESCR_ARRAY(struct json_sensor_output, values, 20, values_len, JSON_TOK_STRING),
+// };
 
 /* -------------------------------------------------------------------------- */
 /* --- BME280 thread --- */

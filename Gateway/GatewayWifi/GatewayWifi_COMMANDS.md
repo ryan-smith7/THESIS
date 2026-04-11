@@ -11,7 +11,7 @@ source zephyr/zephyr-env.sh
 
 ```bash
 cd GatewayWifi
-west build -b esp32_devkitc/esp32/procpu ~/csse4011/repo/prac2/Gateway/GatewayEthernet --pristine
+west build -b esp32_devkitc/esp32/procpu ~/csse4011/repo/prac2/Gateway/GatewayWifi --pristine
 ```
 
 ## Flash

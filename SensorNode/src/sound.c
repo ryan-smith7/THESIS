@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(sound, LOG_LEVEL_INF);
 #define BUF_SIZE           (FFT_SIZE * NUM_CHANNELS * BYTES_PER_SAMPLE)
 #define NUM_RX_BUFS        4U
 #define NUM_TX_BUFS        1U
+// #define NUM_TX_BUFS  2U   /* double-buffer — enough to stay ahead of RX */
 #define TIMEOUT_MS         2000
 #define MIC_SLOT           0U   /* SEL=GND → left channel */
 #define FREQ_RES           ((float)SAMPLE_RATE / (float)FFT_SIZE)
@@ -161,7 +162,7 @@ static void publish(double avg_dbfs, float peak_freq, float peak_mag)
         spec.bins[i] = (v > 65535.0f) ? 65535U : (uint16_t)v;
     }
 
-    // /* ADD THIS */
+    // // /* ADD THIS */
     // printk("[BINS]");
     // for (uint32_t i = 0; i < SOUND_NUM_BINS; i++) {
     //     printk(" %u", spec.bins[i]);
@@ -318,6 +319,14 @@ void sound_thread(void)
     uint32_t accum_count = 0;
 
     while (1) {
+        /* Keep TX alive every iteration — one silence buf per RX buf consumed */
+        // void *tx_mem;
+        // if (k_mem_slab_alloc(&snd_tx_slab, &tx_mem, K_NO_WAIT) == 0) {
+        //     memset(tx_mem, 0, BUF_SIZE);
+        //     if (i2s_write(i2s_tx, tx_mem, BUF_SIZE) < 0) {
+        //         k_mem_slab_free(&snd_tx_slab, tx_mem);
+        //     }
+        // }
         void    *rx_mem;
         uint32_t rx_size;
 
