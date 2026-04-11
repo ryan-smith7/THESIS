@@ -8,33 +8,20 @@
  * USER CONFIGURATION — fill these in before building
  * --------------------------------------------------------------------- */
 
-/* Your IoT Hub hostname, e.g. "myhub.azure-devices.net" */
-#define AZURE_IOT_HUB_HOSTNAME   "iot-hub-esp32-Ryan-Smith.azure-devices.net"
+/* Oracle Cloud MQTT bridge — plaintext, no TLS required on device.
+ * Bridge forwards to Azure IoT Hub over TLS server-side.
+ * For production replace with ESP32-WROVER and direct Azure connection. */
+#define AZURE_IOT_HUB_HOSTNAME   "161.33.232.177"
 
 /* Device ID registered in your IoT Hub */
 #define AZURE_DEVICE_ID          "esp32-device-01"
 
-/*
- * SAS Token — generate with Azure CLI or the Device Explorer tool:
- *
-    az iot hub generate-sas-token \
-        --hub-name iot-hub-esp32-Ryan-Smith \
-        --device-id esp32-device-01 \
-        --duration 31536000 (one year)
- *
- * Paste only the SharedAccessSignature string below (the full
- * "SharedAccessSignature sr=..." value).
- */
-#define AZURE_SAS_TOKEN "SharedAccessSignature sr=iot-hub-esp32-Ryan-Smith.azure-devices.net%2Fdevices%2Fesp32-device-01&sig=dUYE4NNWdgzFTPBah8Z%2FssE2rk3ZYL1sSnihWJBwS%2Fw%3D&se=1774250233"
-/*
- * Azure IoT Hub Baltimore CyberTrust Root CA (PEM).
- * Azure IoT Hub uses DigiCert Global G2 root as of Feb 2023+.
- * Download the latest from:
- *   https://learn.microsoft.com/azure/iot-hub/reference-iot-tls-support
- *
- * Paste the full PEM (including BEGIN/END lines) as a C string below,
- * with \n at the end of each line.
- */
+/* SAS Token — only used for direct Azure connection (TLS mode).
+ * Not required for plaintext bridge connection but kept for reference. */
+#define AZURE_SAS_TOKEN "SharedAccessSignature sr=iot-hub-esp32-Ryan-Smith.azure-devices.net%2Fdevices%2Fesp32-device-01&sig=UW9GXFziBPCEIqktFMXPJWlr%2FOT3QcqcGpT8sDedLmA%3D&se=1805251216"
+
+/* Root CA cert — not used in plaintext bridge mode.
+ * Kept for reference for production WROVER deployment. */
 #define AZURE_ROOT_CA_CERT \
 "-----BEGIN CERTIFICATE-----\r\n"\
 "MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh\r\n"\
@@ -60,13 +47,14 @@
 "-----END CERTIFICATE-----\r\n"
 
 /* -----------------------------------------------------------------------
- * MQTT connection settings (do not change)
+ * MQTT connection settings
  * --------------------------------------------------------------------- */
-#define AZURE_MQTT_PORT      8883
+/* Plaintext port for Oracle bridge — no TLS on device */
+#define AZURE_MQTT_PORT      1883
 #define AZURE_MQTT_CLIENT_ID AZURE_DEVICE_ID
-#define AZURE_MQTT_USERNAME  AZURE_IOT_HUB_HOSTNAME "/" AZURE_DEVICE_ID \
-                                 "/?api-version=2021-04-12"
-// #define AZURE_MQTT_TOPIC     "devices/" AZURE_DEVICE_ID "/messages/events/"
+
+/* Username/password not required for anonymous Oracle bridge connection */
+#define AZURE_MQTT_USERNAME  ""
 #define AZURE_MQTT_TOPIC  "devices/" AZURE_DEVICE_ID "/messages/events/$.ct=application%2Fjson&$.ce=utf-8"
 #define AZURE_TLS_TAG        1
 

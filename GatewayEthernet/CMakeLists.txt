@@ -6,9 +6,3 @@ include_directories(include)
 
 FILE(GLOB app_sources src/*.c)
 target_sources(app PRIVATE ${app_sources})
-
-# zephyr_linker_sources(DATA_SECTIONS esp32_dram_overlay.ld)
-
-# zephyr_linker_sources(DATA_SECTIONS ${CMAKE_CURRENT_SOURCE_DIR}/app_dram1.ld)
-
-zephyr_linker_sources(RAM_SECTIONS ${CMAKE_CURRENT_SOURCE_DIR}/app_dram1.ld)

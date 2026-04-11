@@ -18,7 +18,7 @@
 
 /* SAS Token — only used for direct Azure connection (TLS mode).
  * Not required for plaintext bridge connection but kept for reference. */
-#define AZURE_SAS_TOKEN "SharedAccessSignature sr=iot-hub-esp32-Ryan-Smith.azure-devices.net%2Fdevices%2Fesp32-device-01&sig=dUYE4NNWdgzFTPBah8Z%2FssE2rk3ZYL1sSnihWJBwS%2Fw%3D&se=1774250233"
+#define AZURE_SAS_TOKEN "SharedAccessSignature sr=iot-hub-esp32-Ryan-Smith.azure-devices.net%2Fdevices%2Fesp32-device-01&sig=UW9GXFziBPCEIqktFMXPJWlr%2FOT3QcqcGpT8sDedLmA%3D&se=1805251216"
 
 /* Root CA cert — not used in plaintext bridge mode.
  * Kept for reference for production WROVER deployment. */

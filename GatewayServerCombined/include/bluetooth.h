@@ -11,12 +11,14 @@
 #include <zephyr/bluetooth/uuid.h>
 
 #define BASE_CONTROL_STACK_SIZE 2048
-#define BASE_CONTROL_PRIORITY 5
+#define BASE_CONTROL_PRIORITY   5
 
-#define BASE_PROCESS_STACK_SIZE 2048
-#define BASE_PROCESS_PRIORITY 5
+#define BASE_PROCESS_STACK_SIZE 6144   /* needs headroom for 4 KB sound JSON encode */
+#define BASE_PROCESS_PRIORITY   5
+
+#define MAX_CONN 4   /* maximum simultaneous BLE peripheral connections */
 
 extern void process_data_thread(void);
 extern void base_thread(void);
 
-#endif // BASE_SERVICE_H
+#endif /* BASE_SERVICE_H */
