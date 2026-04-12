@@ -24,6 +24,7 @@
 
 #define OFF 0
 #define ON 1
+#define DEVICE_ID 2
 
 
 // sensor.h
@@ -55,8 +56,10 @@ struct sensor_blk {
     // AS7343
     uint16_t as7343[AS7343_NUM_CH]; // 12 bands + VISIBLE
 
-    // Battery
-    uint16_t batt_mV;
+    // Battery (MAX17048 fuel gauge via fuel_gauge subsystem)
+    uint16_t batt_mV;       /* cell voltage in mV, e.g. 3850         */
+    uint8_t  batt_pct;      /* state of charge 0–100%                */
+    int16_t  batt_rate_x10; /* charge rate ×10 %/hr, + = charging    */
 
     // SPH0645 microphone (1-second averaged FFT summary)
     int16_t  snd_rms_dbfs_x100;  /* dBFS × 100, e.g. -3820 = -38.20 dBFS */
@@ -71,7 +74,7 @@ struct sensor_blk {
 struct bme280_msg { double temp_c, rh_pct, press_hPa; };
 struct ens160_msg { int eco2_ppm, tvoc_ppb, aqi; };
 struct as7343_msg { uint16_t ch[AS7343_NUM_CH]; /*405..855*/ };
-struct batt_msg   { uint16_t mV; };
+struct batt_msg   { uint16_t mV; uint8_t pct; int16_t rate_x10; };
 struct moisture_msg { uint16_t vwc_x100; };  /* VWC % × 100 */
 
 /* -------- Message queues -------- */
@@ -90,13 +93,10 @@ extern void set_logging_state(uint8_t new_value);
 extern void set_logging_file(char* file_abs_path);
 
 extern void bme280_thread(void);
-
 extern void ens160_thread(void);
-
 extern void as7343_thread(void);
-
+extern void max17048_thread(void);
 extern void combiner_thread(void);
-
 extern void moisture_thread(void);
 
 /**

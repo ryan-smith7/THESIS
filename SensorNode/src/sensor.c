@@ -8,6 +8,7 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/sensor/ens160.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/fuel_gauge.h>
 #include "as7343.h"
 #include "sound.h"
 #include "sensor.h"
@@ -364,6 +365,72 @@ void moisture_thread(void)
     }
 }
 
+/* -------------------------------------------------------------------------- */
+/* --- MAX17048 Fuel Gauge thread ------------------------------------------ */
+/*
+ * Uses the Zephyr fuel_gauge subsystem (not sensor subsystem).
+ * The MAX17048 driver supports exactly 4 properties:
+ *   FUEL_GAUGE_VOLTAGE                  → val.voltage (µV)
+ *   FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE → val.relative_state_of_charge (%)
+ *   FUEL_GAUGE_RUNTIME_TO_EMPTY         → val.runtime_to_empty (minutes)
+ *   FUEL_GAUGE_RUNTIME_TO_FULL          → val.runtime_to_full (minutes)
+ *
+ * Charge rate is NOT directly exposed — we derive charging state from
+ * RUNTIME_TO_FULL: if it returns a valid value the battery is charging.
+ */
+// void max17048_thread(void)
+// {
+//     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
+//     if (!device_is_ready(dev)) {
+//         LOG_ERR("MAX17048 fuel gauge not ready");
+//         return;
+//     }
+//     LOG_INF("MAX17048 fuel gauge ready");
+
+//     while (1) {
+//         union fuel_gauge_prop_val voltage, soc, tte, ttf;
+
+//         int rv  = fuel_gauge_get_prop(dev, FUEL_GAUGE_VOLTAGE,                    &voltage);
+//         int rs  = fuel_gauge_get_prop(dev, FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE,   &soc);
+//         int rte = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_EMPTY,           &tte);
+//         int rtf = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_FULL,            &ttf);
+
+//         if (rv != 0 || rs != 0) {
+//             LOG_ERR("MAX17048: read failed (rv=%d rs=%d)", rv, rs);
+//             k_msleep(SAMPLE_PERIOD_MS);
+//             continue;
+//         }
+
+//         /*
+//          * Derive a simple charge rate sign from time-to-full/empty:
+//          *   ttf valid → charging   → positive rate placeholder (+10 = +1.0%/hr)
+//          *   tte valid → discharging → negative rate placeholder (-10 = -1.0%/hr)
+//          *   neither   → unknown    → 0
+//          */
+//         int16_t rate_x10 = 0;
+//         if (rtf == 0 && ttf.runtime_to_full > 0)        rate_x10 = +10;
+//         else if (rte == 0 && tte.runtime_to_empty > 0)  rate_x10 = -10;
+
+//         struct batt_msg m = {
+//             .mV       = (uint16_t)(voltage.voltage / 1000),  /* µV → mV */
+//             .pct      = (uint8_t)CLAMP(soc.relative_state_of_charge, 0, 100),
+//             .rate_x10 = rate_x10,
+//         };
+
+//         printk("BATT: %u mV  %u%%  %s\n",
+//                m.mV, m.pct,
+//                rate_x10 > 0 ? "charging" : (rate_x10 < 0 ? "discharging" : "unknown"));
+
+//         if (k_msgq_put(&batt_q, &m, K_NO_WAIT) != 0) {
+//             struct batt_msg dump;
+//             (void)k_msgq_get(&batt_q, &dump, K_NO_WAIT);
+//             (void)k_msgq_put(&batt_q, &m, K_NO_WAIT);
+//         }
+
+//         k_msleep(SAMPLE_PERIOD_MS);
+//     }
+// }
+
 /* Combiner retains the latest partials and emits a full frame once per tick */
 void combiner_thread(void)
 {
@@ -378,13 +445,14 @@ void combiner_thread(void)
     bool have_bme=false, have_ens=false, have_as7=false, have_bat=false;
 
     const uint8_t PROTO_VER = 1;
-    const uint8_t DEV_ID    = 2;
+    const uint8_t DEV_ID    = DEV_ID;
 
     while (1) {
         /* Non-blocking harvest of any new partials that arrived in the last cycle */
         if (k_msgq_get(&bme_q,      &bme,   K_NO_WAIT) == 0) have_bme = true;
         if (k_msgq_get(&ens_q,      &ens,   K_NO_WAIT) == 0) have_ens = true;
         if (k_msgq_get(&as7_q,      &as7,   K_NO_WAIT) == 0) have_as7 = true;
+        if (k_msgq_get(&batt_q,     &bat,   K_NO_WAIT) == 0) have_bat = true;
         (void)k_msgq_get(&sound_q,   &snd,   K_NO_WAIT);
         (void)k_msgq_get(&moisture_q, &moist, K_NO_WAIT);
 
@@ -410,9 +478,10 @@ void combiner_thread(void)
             s.as7343[i] = as7.ch[i];
         }
 
-        /* Battery (optional) */
-        // s.batt_mV = bat.mV;
-        s.batt_mV = 100;
+        /* Battery (MAX17048 fuel gauge) */
+        s.batt_mV       = bat.mV;
+        s.batt_pct      = bat.pct;
+        s.batt_rate_x10 = bat.rate_x10;
 
         /* Sound (SPH0645 FFT summary) */
         s.snd_rms_dbfs_x100 = snd.rms_dbfs_x100;

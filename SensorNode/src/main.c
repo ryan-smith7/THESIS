@@ -43,13 +43,17 @@ K_THREAD_DEFINE(ens160_tid,  STACK_SIZE_SENSOR, ens160_thread,
                 NULL, NULL, NULL,
                 BME280_THREAD_PRIORITY, 0, 0);
 
-K_THREAD_DEFINE(moisture_tid,  STACK_SIZE_SENSOR, moisture_thread,
-                    NULL, NULL, NULL,
-                    BME280_THREAD_PRIORITY, 0, 0);
+// K_THREAD_DEFINE(moisture_tid,  STACK_SIZE_SENSOR, moisture_thread,
+//                     NULL, NULL, NULL,
+//                     BME280_THREAD_PRIORITY, 0, 0);
 
-K_THREAD_DEFINE(as7343_tid,  STACK_SIZE_SENSOR, as7343_thread,
-                NULL, NULL, NULL,
-                BME280_THREAD_PRIORITY, 0, 0);
+// K_THREAD_DEFINE(as7343_tid,  STACK_SIZE_SENSOR, as7343_thread,
+//                 NULL, NULL, NULL,
+//                 BME280_THREAD_PRIORITY, 0, 0);
+
+// K_THREAD_DEFINE(max17048_tid, STACK_SIZE_SENSOR, max17048_thread,
+//                 NULL, NULL, NULL,
+//                 BME280_THREAD_PRIORITY, 0, 0);
 
 K_THREAD_DEFINE(combiner_tid, STACK_SIZE_SENSOR, combiner_thread,
                 NULL, NULL, NULL,
