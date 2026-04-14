@@ -545,6 +545,578 @@
         }
       }
     },
+    "panel-15": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT timestamp AS time, batt_pct AS [Node 1 %] FROM telemetry WHERE timestamp >= $__timeFrom() AND timestamp <= $__timeTo() AND batt_pct IS NOT NULL AND batt_pct > 0 AND device_id = 'dev-1' ORDER BY timestamp ASC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT timestamp AS time, batt_pct AS [Node 2 %] FROM telemetry WHERE timestamp >= $__timeFrom() AND timestamp <= $__timeTo() AND batt_pct IS NOT NULL AND batt_pct > 0 AND device_id = 'dev-2' ORDER BY timestamp ASC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Battery state of charge (%) for Node 1 and Node 2.",
+        "id": 15,
+        "links": [],
+        "title": "Battery State of Charge (%)",
+        "vizConfig": {
+          "group": "timeseries",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "%",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 2,
+                  "pointSize": 4,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "line"
+                  }
+                },
+                "max": 100,
+                "min": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 20
+                    },
+                    {
+                      "color": "green",
+                      "value": 50
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Node 1 %"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#FF6B35",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Node 2 %"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#00C8FF",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "options": {
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
+              },
+              "legend": {
+                "calcs": [
+                  "lastNotNull",
+                  "min"
+                ],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.1.0-24278035669"
+        }
+      }
+    },
+    "panel-16": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT TOP 1 timestamp AS time, batt_mv AS value FROM telemetry WHERE batt_mv IS NOT NULL AND batt_mv > 0 AND device_id = 'dev-1' ORDER BY timestamp DESC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT TOP 1 timestamp AS time, batt_pct AS value FROM telemetry WHERE batt_pct IS NOT NULL AND batt_pct > 0 AND device_id = 'dev-1' ORDER BY timestamp DESC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT TOP 1 timestamp AS time, batt_rate_pct_hr AS value FROM telemetry WHERE batt_rate_pct_hr IS NOT NULL AND device_id = 'dev-1' ORDER BY timestamp DESC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Current battery status for Node 1 (sensor dev-1).",
+        "id": 16,
+        "links": [],
+        "title": "Node 1 Battery",
+        "vizConfig": {
+          "group": "stat",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 3400
+                    },
+                    {
+                      "color": "green",
+                      "value": 3700
+                    }
+                  ]
+                },
+                "unit": "mV"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byFrameRefID",
+                    "options": "B"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percent"
+                    },
+                    {
+                      "id": "displayName",
+                      "value": "State of Charge"
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {
+                            "color": "red",
+                            "value": 0
+                          },
+                          {
+                            "color": "yellow",
+                            "value": 20
+                          },
+                          {
+                            "color": "green",
+                            "value": 50
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byFrameRefID",
+                    "options": "C"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percent"
+                    },
+                    {
+                      "id": "displayName",
+                      "value": "Rate %/hr"
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byFrameRefID",
+                    "options": "A"
+                  },
+                  "properties": [
+                    {
+                      "id": "displayName",
+                      "value": "Voltage"
+                    }
+                  ]
+                }
+              ]
+            },
+            "options": {
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "horizontal",
+              "percentChangeColorMode": "standard",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showPercentChange": false,
+              "textMode": "auto",
+              "wideLayout": true
+            }
+          },
+          "version": "13.1.0-24278035669"
+        }
+      }
+    },
+    "panel-17": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT TOP 1 timestamp AS time, batt_mv AS value FROM telemetry WHERE batt_mv IS NOT NULL AND batt_mv > 0 AND device_id = 'dev-2' ORDER BY timestamp DESC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT TOP 1 timestamp AS time, batt_pct AS value FROM telemetry WHERE batt_pct IS NOT NULL AND batt_pct > 0 AND device_id = 'dev-2' ORDER BY timestamp DESC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT TOP 1 timestamp AS time, batt_rate_pct_hr AS value FROM telemetry WHERE batt_rate_pct_hr IS NOT NULL AND device_id = 'dev-2' ORDER BY timestamp DESC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "C"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Current battery status for Node 2 (sensor dev-2).",
+        "id": 17,
+        "links": [],
+        "title": "Node 2 Battery",
+        "vizConfig": {
+          "group": "stat",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 3400
+                    },
+                    {
+                      "color": "green",
+                      "value": 3700
+                    }
+                  ]
+                },
+                "unit": "mV"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byFrameRefID",
+                    "options": "B"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percent"
+                    },
+                    {
+                      "id": "displayName",
+                      "value": "State of Charge"
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {
+                            "color": "red",
+                            "value": 0
+                          },
+                          {
+                            "color": "yellow",
+                            "value": 20
+                          },
+                          {
+                            "color": "green",
+                            "value": 50
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byFrameRefID",
+                    "options": "C"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percent"
+                    },
+                    {
+                      "id": "displayName",
+                      "value": "Rate %/hr"
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byFrameRefID",
+                    "options": "A"
+                  },
+                  "properties": [
+                    {
+                      "id": "displayName",
+                      "value": "Voltage"
+                    }
+                  ]
+                }
+              ]
+            },
+            "options": {
+              "colorMode": "background",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "horizontal",
+              "percentChangeColorMode": "standard",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showPercentChange": false,
+              "textMode": "auto",
+              "wideLayout": true
+            }
+          },
+          "version": "13.1.0-24278035669"
+        }
+      }
+    },
     "panel-2": {
       "kind": "Panel",
       "spec": {
@@ -1243,28 +1815,32 @@
                       "editorMode": "code",
                       "format": "time_series",
                       "rawQuery": true,
-                      "rawSql": "SELECT timestamp AS time, batt_mv AS value FROM telemetry \nWHERE timestamp >= $__timeFrom() AND timestamp <= $__timeTo() \nAND batt_mv IS NOT NULL\nORDER BY timestamp ASC",
-                      "sql": {
-                        "columns": [
-                          {
-                            "parameters": [],
-                            "type": "function"
-                          }
-                        ],
-                        "groupBy": [
-                          {
-                            "property": {
-                              "type": "string"
-                            },
-                            "type": "groupBy"
-                          }
-                        ],
-                        "limit": 50
-                      }
+                      "rawSql": "SELECT timestamp AS time, batt_mv AS [Node 1 mV] FROM telemetry WHERE timestamp >= $__timeFrom() AND timestamp <= $__timeTo() AND batt_mv IS NOT NULL AND batt_mv > 0 AND device_id = 'dev-1' ORDER BY timestamp ASC"
                     },
                     "version": "v0"
                   },
                   "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "ffdzxu76e34lca"
+                    },
+                    "group": "mssql",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "format": "time_series",
+                      "rawQuery": true,
+                      "rawSql": "SELECT timestamp AS time, batt_mv AS [Node 2 mV] FROM telemetry WHERE timestamp >= $__timeFrom() AND timestamp <= $__timeTo() AND batt_mv IS NOT NULL AND batt_mv > 0 AND device_id = 'dev-2' ORDER BY timestamp ASC"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "B"
                 }
               }
             ],
@@ -1272,18 +1848,55 @@
             "transformations": []
           }
         },
-        "description": "",
+        "description": "Battery cell voltage for Node 1 and Node 2. Zeros excluded — only populated from dedicated battery packets.",
         "id": 7,
         "links": [],
-        "title": "Battery (mV)",
+        "title": "Battery Voltage (mV)",
         "vizConfig": {
-          "group": "gauge",
+          "group": "timeseries",
           "kind": "VizConfig",
           "spec": {
             "fieldConfig": {
               "defaults": {
-                "max": 4200,
-                "min": 0,
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "mV",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "barWidthFactor": 0.6,
+                  "drawStyle": "line",
+                  "fillOpacity": 8,
+                  "gradientMode": "opacity",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 2,
+                  "pointSize": 4,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "showValues": false,
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "line"
+                  }
+                },
+                "max": 4300,
+                "min": 3000,
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
@@ -1303,35 +1916,58 @@
                 },
                 "unit": "mV"
               },
-              "overrides": []
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Node 1 mV"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#FF6B35",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Node 2 mV"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#00C8FF",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                }
+              ]
             },
             "options": {
-              "barShape": "flat",
-              "barWidthFactor": 0.5,
-              "effects": {
-                "barGlow": false,
-                "centerGlow": false,
-                "gradient": false
+              "annotations": {
+                "clustering": -1,
+                "multiLane": false
               },
-              "endpointMarker": "point",
-              "minVizHeight": 75,
-              "minVizWidth": 75,
-              "orientation": "auto",
-              "reduceOptions": {
+              "legend": {
                 "calcs": [
-                  "lastNotNull"
+                  "lastNotNull",
+                  "min"
                 ],
-                "fields": "",
-                "values": false
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
               },
-              "segmentCount": 1,
-              "segmentSpacing": 0.3,
-              "shape": "gauge",
-              "showThresholdLabels": false,
-              "showThresholdMarkers": true,
-              "sizing": "auto",
-              "sparkline": false,
-              "textMode": "auto"
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "none"
+              }
             }
           },
           "version": "13.1.0-24278035669"
@@ -1886,12 +2522,51 @@
           "spec": {
             "element": {
               "kind": "ElementReference",
-              "name": "panel-7"
+              "name": "panel-16"
             },
-            "height": 8,
+            "height": 4,
             "width": 6,
             "x": 18,
             "y": 16
+          }
+        },
+        {
+          "kind": "GridLayoutItem",
+          "spec": {
+            "element": {
+              "kind": "ElementReference",
+              "name": "panel-17"
+            },
+            "height": 4,
+            "width": 6,
+            "x": 18,
+            "y": 20
+          }
+        },
+        {
+          "kind": "GridLayoutItem",
+          "spec": {
+            "element": {
+              "kind": "ElementReference",
+              "name": "panel-7"
+            },
+            "height": 8,
+            "width": 12,
+            "x": 0,
+            "y": 24
+          }
+        },
+        {
+          "kind": "GridLayoutItem",
+          "spec": {
+            "element": {
+              "kind": "ElementReference",
+              "name": "panel-15"
+            },
+            "height": 8,
+            "width": 12,
+            "x": 12,
+            "y": 24
           }
         },
         {
@@ -1904,7 +2579,7 @@
             "height": 10,
             "width": 24,
             "x": 0,
-            "y": 24
+            "y": 32
           }
         },
         {
@@ -1917,7 +2592,7 @@
             "height": 8,
             "width": 24,
             "x": 0,
-            "y": 34
+            "y": 42
           }
         },
         {
@@ -1930,7 +2605,7 @@
             "height": 8,
             "width": 24,
             "x": 0,
-            "y": 42
+            "y": 50
           }
         },
         {
@@ -1943,7 +2618,7 @@
             "height": 10,
             "width": 24,
             "x": 0,
-            "y": 50
+            "y": 58
           }
         },
         {
@@ -1956,7 +2631,7 @@
             "height": 8,
             "width": 24,
             "x": 0,
-            "y": 60
+            "y": 68
           }
         }
       ]
