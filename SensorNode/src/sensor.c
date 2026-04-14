@@ -12,7 +12,7 @@
 #include "as7343.h"
 #include "sound.h"
 #include "sensor.h"
-#include "time_sync.h" 
+#include "time_sync.h"
 
 #include <zephyr/drivers/adc.h>
 
@@ -58,16 +58,10 @@ struct json_sensor_output {
     size_t values_len;
 };
 
-// static const struct json_obj_descr json_descr[] = {
-//     JSON_OBJ_DESCR_PRIM(struct json_sensor_output, dev_id, JSON_TOK_NUMBER),
-//     JSON_OBJ_DESCR_PRIM(struct json_sensor_output, rtc_time, JSON_TOK_STRING),
-//     JSON_OBJ_DESCR_ARRAY(struct json_sensor_output, values, 20, values_len, JSON_TOK_STRING),
-// };
-
 /* -------------------------------------------------------------------------- */
 /* --- BME280 thread --- */
 void bme280_thread(void)
-{   
+{
     const struct device *dev = DEVICE_DT_GET_ONE(bosch_bme280);
     if (!device_is_ready(dev)) {
         LOG_ERR("BME280 device not ready");
@@ -75,60 +69,32 @@ void bme280_thread(void)
     }
 
     struct sensor_value temp, press, hum;
-    // struct json_sensor_output json_out = {0};
 
     while (1) {
-
-        // i2c_gate_acquire();
         if (sensor_sample_fetch(dev) < 0) {
             LOG_ERR("BME280: fetch failed");
-            // i2c_gate_release();
             k_msleep(SAMPLE_PERIOD_MS);
             continue;
         }
-        //  i2c_gate_release();
 
-        // json_out.dev_id = DEV_ID_BME280;
-        // json_out.rtc_time = get_rtc_time();
-        // json_out.values_len = 0;
-
-        // static char temp_str[32], hum_str[32], press_str[32];
-        // if (sensor_channel_get(dev, SENSOR_CHAN_AMBIENT_TEMP, &temp) == 0) {
-        //     snprintf(temp_str, sizeof(temp_str), "%.2f", sensor_value_to_double(&temp));
-        //     json_out.values[json_out.values_len++] = temp_str;
-        // }
-        // if (sensor_channel_get(dev, SENSOR_CHAN_PRESS, &press) == 0) {
-        //     snprintf(press_str, sizeof(press_str), "%.2f", sensor_value_to_double(&press));
-        //     json_out.values[json_out.values_len++] = press_str;
-        // }
-        // if (sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &hum) == 0) {
-        //     snprintf(hum_str, sizeof(hum_str), "%.2f", sensor_value_to_double(&hum));
-        //     json_out.values[json_out.values_len++] = hum_str;
-        // }
         sensor_channel_get(dev, SENSOR_CHAN_AMBIENT_TEMP, &temp);
         sensor_channel_get(dev, SENSOR_CHAN_PRESS, &press);
         sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &hum);
 
-        // static char json_buf[MAX_JSON_SIZE];
-        // int ret = json_obj_encode_buf(json_descr, ARRAY_SIZE(json_descr), &json_out,
-        //                               json_buf, sizeof(json_buf));
-        // if (ret < 0) {
-        //     LOG_ERR("BME280 JSON encode error: %d", ret);
-        // } else {
-        //     printk("%s\n", json_buf);
-        // }
-
-        // k_msleep(SAMPLE_PERIOD_MS);
+        uint16_t bme_utc_ms;
+        uint32_t bme_utc_sec = time_sync_get_utc_ms(&bme_utc_ms);
 
         struct bme280_msg m = {
-            .temp_c   = sensor_value_to_double(&temp),
-            .rh_pct   = sensor_value_to_double(&hum),
-            .press_hPa= sensor_value_to_double(&press),
+            .temp_c    = sensor_value_to_double(&temp),
+            .rh_pct    = sensor_value_to_double(&hum),
+            .press_hPa = sensor_value_to_double(&press),
+            .utc_sec   = bme_utc_sec,
+            .utc_ms    = bme_utc_ms,
         };
 
-        printk("BME put: T=%.2fC RH=%.2f%% P=%.3f(kPa?)\n",
-            m.temp_c, m.rh_pct, m.press_hPa);
-        /* Drop oldest if full to keep freshest */
+        printk("BME put: T=%.2fC RH=%.2f%% P=%.3f(kPa?) UTC=%u.%03u\n",
+            m.temp_c, m.rh_pct, m.press_hPa, m.utc_sec, m.utc_ms);
+
         if (k_msgq_put(&bme_q, &m, K_NO_WAIT) != 0) {
             struct bme280_msg dump;
             (void)k_msgq_get(&bme_q, &dump, K_NO_WAIT);
@@ -141,7 +107,7 @@ void bme280_thread(void)
 /* -------------------------------------------------------------------------- */
 /* --- ENS160 thread --- */
 void ens160_thread(void)
-{   
+{
     const struct device *dev = DEVICE_DT_GET_ONE(sciosense_ens160);
     if (!device_is_ready(dev)) {
         LOG_ERR("ENS160 device not ready");
@@ -150,50 +116,32 @@ void ens160_thread(void)
     LOG_INF("ENS160 device ready");
 
     struct sensor_value eco2, tvoc, aqi;
-    // struct json_sensor_output json_out = {0};
 
     while (1) {
-        // i2c_gate_acquire();
         if (sensor_sample_fetch(dev) < 0) {
             LOG_ERR("ENS160: fetch failed");
-            // i2c_gate_release();
             k_msleep(SAMPLE_PERIOD_MS);
             continue;
         }
-        // i2c_gate_release();
 
-        // json_out.dev_id = DEV_ID_ENS160;
-        // json_out.rtc_time = get_rtc_time();
-        // json_out.values_len = 0;
-
-        // static char eco2_str[32], tvoc_str[32], aqi_str[32];
-        // if (sensor_channel_get(dev, SENSOR_CHAN_CO2, &eco2) == 0) {
-        //     snprintf(eco2_str, sizeof(eco2_str), "%d", eco2.val1);
-        //     json_out.values[json_out.values_len++] = eco2_str;
-        // }
-        // if (sensor_channel_get(dev, SENSOR_CHAN_VOC, &tvoc) == 0) {
-        //     snprintf(tvoc_str, sizeof(tvoc_str), "%d", tvoc.val1);
-        //     json_out.values[json_out.values_len++] = tvoc_str;
-        // }
-        // if (sensor_channel_get(dev, SENSOR_CHAN_ENS160_AQI, &aqi) == 0) {
-        //     snprintf(aqi_str, sizeof(aqi_str), "%d", aqi.val1);
-        //     json_out.values[json_out.values_len++] = aqi_str;
-        // }
         sensor_channel_get(dev, SENSOR_CHAN_CO2, &eco2);
         sensor_channel_get(dev, SENSOR_CHAN_VOC, &tvoc);
         sensor_channel_get(dev, SENSOR_CHAN_ENS160_AQI, &aqi);
 
-        // static char json_buf[MAX_JSON_SIZE];
-        // int ret = json_obj_encode_buf(json_descr, ARRAY_SIZE(json_descr), &json_out,
-        //                               json_buf, sizeof(json_buf));
-        // if (ret < 0) {
-        //     LOG_ERR("ENS160 JSON encode error: %d", ret);
-        // } else {
-        //     printk("%s\n", json_buf);
-        // }
+        uint16_t ens_utc_ms;
+        uint32_t ens_utc_sec = time_sync_get_utc_ms(&ens_utc_ms);
 
-        struct ens160_msg m = { .eco2_ppm = eco2.val1, .tvoc_ppb = tvoc.val1, .aqi = aqi.val1 };
-        printk("ENS put: eCO2=%d TVOC=%d AQI=%d\n", m.eco2_ppm, m.tvoc_ppb, m.aqi);
+        struct ens160_msg m = {
+            .eco2_ppm = eco2.val1,
+            .tvoc_ppb = tvoc.val1,
+            .aqi      = aqi.val1,
+            .utc_sec  = ens_utc_sec,
+            .utc_ms   = ens_utc_ms,
+        };
+
+        printk("ENS put: eCO2=%d TVOC=%d AQI=%d UTC=%u.%03u\n",
+            m.eco2_ppm, m.tvoc_ppb, m.aqi, m.utc_sec, m.utc_ms);
+
         if (k_msgq_put(&ens_q, &m, K_NO_WAIT) != 0) {
             struct ens160_msg dump;
             (void)k_msgq_get(&ens_q, &dump, K_NO_WAIT);
@@ -211,7 +159,6 @@ static const int wl_order[13] = {
 
 static int wl_index(int nm)
 {
-    /* exact match first (covers 999 visible) */
     for (int i = 0; i < 13; ++i) {
         if (wl_order[i] == nm) return i;
     }
@@ -219,7 +166,7 @@ static int wl_index(int nm)
 }
 
 /* -------------------------------------------------------------------------- */
-/* --- AS7343 thread (aligned -> queue, includes 999nm sum) ----------------- */
+/* --- AS7343 thread -------------------------------------------------------- */
 void as7343_thread(void)
 {
     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
@@ -230,22 +177,19 @@ void as7343_thread(void)
     LOG_INF("AS7343 device ready");
 
     while (1) {
-        // i2c_gate_acquire();
         if (sensor_sample_fetch(dev) < 0) {
             LOG_ERR("AS7343: fetch failed");
-            // i2c_gate_release();
             k_msleep(SAMPLE_PERIOD_MS);
             continue;
         }
-        // i2c_gate_release();
 
         uint16_t ch12[13] = {0};
         struct sensor_value val;
 
         for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
             if (sensor_channel_get(dev, SENSOR_CHAN_PRIV_START + i, &val) == 0) {
-                int nm  = val.val1;      // wavelength in nm
-                int idx = wl_index(nm);  // index in wl_order
+                int nm  = val.val1;
+                int idx = wl_index(nm);
                 if (idx >= 0) {
                     int c = val.val2;
                     if (c < 0)      c = 0;
@@ -257,7 +201,6 @@ void as7343_thread(void)
             }
         }
 
-        // Build message: 12 bands + VISIBLE=999nm sum at index 12
         struct as7343_msg msg = {0};
         uint32_t vis = 0;
         for (int i = 0; i < 12; ++i) {
@@ -265,10 +208,14 @@ void as7343_thread(void)
             vis += ch12[i];
         }
         if (vis > 0xFFFF) vis = 0xFFFF;
-        msg.ch[12] = (uint16_t)vis; // index 12 == 999nm summary
+        msg.ch[12] = (uint16_t)vis;
 
-        printk("AS7 put: 450nm=%u 600nm=%u VIS=%u\n", msg.ch[2], msg.ch[7], msg.ch[12]);
-        // Push (drop-oldest to keep freshest)
+        /* Stamp UTC at measurement moment */
+        msg.utc_sec = time_sync_get_utc_ms(&msg.utc_ms);
+
+        printk("AS7 put: 450nm=%u 600nm=%u VIS=%u UTC=%u.%03u\n",
+               msg.ch[2], msg.ch[7], msg.ch[12], msg.utc_sec, msg.utc_ms);
+
         if (k_msgq_put(&as7_q, &msg, K_NO_WAIT) != 0) {
             struct as7343_msg dump;
             (void)k_msgq_get(&as7_q, &dump, K_NO_WAIT);
@@ -280,31 +227,13 @@ void as7343_thread(void)
 }
 
 /* -------------------------------------------------------------------------- */
-/* --- Capacitive Soil Moisture Sensor v2 thread --------------------------- */
-/*
- * Uses Zephyr ADC API to read the capacitive sensor output voltage.
- * Raw ADC counts are converted to VWC% using a linear calibration:
- *
- *   VWC% = (dry - raw) / (dry - wet) × 100
- *
- * Default calibration (v2 sensor, 3.3 V supply, 12-bit ADC):
- *   dry  = 2900 counts  (sensor in open air)
- *   wet  = 1200 counts  (sensor fully submerged)
- *
- * These are community-measured defaults. Override in prj.conf:
- *   CONFIG_MOISTURE_DRY_COUNTS=2900
- *   CONFIG_MOISTURE_WET_COUNTS=1200
- *
- * Result stored as VWC × 100 (uint16), e.g. 4567 = 45.67%.
- */
+/* --- Capacitive Soil Moisture Sensor thread ------------------------------- */
 
 static uint16_t compute_vwc_x100(uint16_t raw)
 {
     if (raw >= CONFIG_MOISTURE_DRY_COUNTS) return 0;
     if (raw <= CONFIG_MOISTURE_WET_COUNTS) return 10000;
 
-    /* Integer arithmetic — multiply before divide to preserve precision.
-     * Max intermediate: 1700 × 10000 = 17,000,000 — fits in uint32_t. */
     uint32_t num = (uint32_t)(CONFIG_MOISTURE_DRY_COUNTS - raw) * 10000U;
     return (uint16_t)(num / (CONFIG_MOISTURE_DRY_COUNTS - CONFIG_MOISTURE_WET_COUNTS));
 }
@@ -352,9 +281,18 @@ void moisture_thread(void)
         LOG_INF("Moisture: raw=%u", raw);
         uint16_t vwc = compute_vwc_x100(raw);
 
-        printk("MOIST put: raw=%u  VWC=%.2f%%\n", raw, (double)vwc / 100.0);
+        uint16_t mst_utc_ms;
+        uint32_t mst_utc_sec = time_sync_get_utc_ms(&mst_utc_ms);
 
-        struct moisture_msg m = { .vwc_x100 = vwc };
+        struct moisture_msg m = {
+            .vwc_x100 = vwc,
+            .utc_sec  = mst_utc_sec,
+            .utc_ms   = mst_utc_ms,
+        };
+
+        printk("MOIST put: raw=%u  VWC=%.2f%%  UTC=%u.%03u\n",
+            raw, (double)vwc / 100.0, m.utc_sec, m.utc_ms);
+
         if (k_msgq_put(&moisture_q, &m, K_NO_WAIT) != 0) {
             struct moisture_msg dump;
             (void)k_msgq_get(&moisture_q, &dump, K_NO_WAIT);
@@ -365,139 +303,124 @@ void moisture_thread(void)
     }
 }
 
+#if defined(CONFIG_FUEL_GAUGE)
 /* -------------------------------------------------------------------------- */
-/* --- MAX17048 Fuel Gauge thread ------------------------------------------ */
-/*
- * Uses the Zephyr fuel_gauge subsystem (not sensor subsystem).
- * The MAX17048 driver supports exactly 4 properties:
- *   FUEL_GAUGE_VOLTAGE                  → val.voltage (µV)
- *   FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE → val.relative_state_of_charge (%)
- *   FUEL_GAUGE_RUNTIME_TO_EMPTY         → val.runtime_to_empty (minutes)
- *   FUEL_GAUGE_RUNTIME_TO_FULL          → val.runtime_to_full (minutes)
- *
- * Charge rate is NOT directly exposed — we derive charging state from
- * RUNTIME_TO_FULL: if it returns a valid value the battery is charging.
- */
-// void max17048_thread(void)
-// {
-//     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
-//     if (!device_is_ready(dev)) {
-//         LOG_ERR("MAX17048 fuel gauge not ready");
-//         return;
-//     }
-//     LOG_INF("MAX17048 fuel gauge ready");
+/* --- MAX17048 Fuel Gauge thread (commented — enable when hardware ready) -- */
+void max17048_thread(void)
+{
+    const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
+    if (!device_is_ready(dev)) {
+        LOG_ERR("MAX17048 fuel gauge not ready");
+        return;
+    }
+    LOG_INF("MAX17048 fuel gauge ready");
 
-//     while (1) {
-//         union fuel_gauge_prop_val voltage, soc, tte, ttf;
+    while (1) {
+        union fuel_gauge_prop_val voltage, soc, tte, ttf;
 
-//         int rv  = fuel_gauge_get_prop(dev, FUEL_GAUGE_VOLTAGE,                    &voltage);
-//         int rs  = fuel_gauge_get_prop(dev, FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE,   &soc);
-//         int rte = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_EMPTY,           &tte);
-//         int rtf = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_FULL,            &ttf);
+        int rv  = fuel_gauge_get_prop(dev, FUEL_GAUGE_VOLTAGE,                  &voltage);
+        int rs  = fuel_gauge_get_prop(dev, FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE, &soc);
+        int rte = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_EMPTY,         &tte);
+        int rtf = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_FULL,          &ttf);
 
-//         if (rv != 0 || rs != 0) {
-//             LOG_ERR("MAX17048: read failed (rv=%d rs=%d)", rv, rs);
-//             k_msleep(SAMPLE_PERIOD_MS);
-//             continue;
-//         }
+        if (rv != 0 || rs != 0) {
+            LOG_ERR("MAX17048: read failed (rv=%d rs=%d)", rv, rs);
+            k_msleep(SAMPLE_PERIOD_MS);
+            continue;
+        }
 
-//         /*
-//          * Derive a simple charge rate sign from time-to-full/empty:
-//          *   ttf valid → charging   → positive rate placeholder (+10 = +1.0%/hr)
-//          *   tte valid → discharging → negative rate placeholder (-10 = -1.0%/hr)
-//          *   neither   → unknown    → 0
-//          */
-//         int16_t rate_x10 = 0;
-//         if (rtf == 0 && ttf.runtime_to_full > 0)        rate_x10 = +10;
-//         else if (rte == 0 && tte.runtime_to_empty > 0)  rate_x10 = -10;
+        int16_t rate_x10 = 0;
+        if (rtf == 0 && ttf.runtime_to_full > 0)        rate_x10 = +10;
+        else if (rte == 0 && tte.runtime_to_empty > 0)  rate_x10 = -10;
 
-//         struct batt_msg m = {
-//             .mV       = (uint16_t)(voltage.voltage / 1000),  /* µV → mV */
-//             .pct      = (uint8_t)CLAMP(soc.relative_state_of_charge, 0, 100),
-//             .rate_x10 = rate_x10,
-//         };
+        uint16_t bat_utc_ms;
+        uint32_t bat_utc_sec = time_sync_get_utc_ms(&bat_utc_ms);
 
-//         printk("BATT: %u mV  %u%%  %s\n",
-//                m.mV, m.pct,
-//                rate_x10 > 0 ? "charging" : (rate_x10 < 0 ? "discharging" : "unknown"));
+        struct batt_msg m = {
+            .mV       = (uint16_t)(voltage.voltage / 1000),
+            .pct      = (uint8_t)CLAMP(soc.relative_state_of_charge, 0, 100),
+            .rate_x10 = rate_x10,
+            .utc_sec  = bat_utc_sec,
+            .utc_ms   = bat_utc_ms,
+        };
 
-//         if (k_msgq_put(&batt_q, &m, K_NO_WAIT) != 0) {
-//             struct batt_msg dump;
-//             (void)k_msgq_get(&batt_q, &dump, K_NO_WAIT);
-//             (void)k_msgq_put(&batt_q, &m, K_NO_WAIT);
-//         }
+        printk("BATT: %u mV  %u%%  %s  UTC=%u.%03u\n",
+               m.mV, m.pct,
+               rate_x10 > 0 ? "charging" : (rate_x10 < 0 ? "discharging" : "unknown"),
+               m.utc_sec, m.utc_ms);
 
-//         k_msleep(SAMPLE_PERIOD_MS);
-//     }
-// }
+        if (k_msgq_put(&batt_q, &m, K_NO_WAIT) != 0) {
+            struct batt_msg dump;
+            (void)k_msgq_get(&batt_q, &dump, K_NO_WAIT);
+            (void)k_msgq_put(&batt_q, &m, K_NO_WAIT);
+        }
 
-/* Combiner retains the latest partials and emits a full frame once per tick */
+        k_msleep(SAMPLE_PERIOD_MS);
+    }
+}
+#endif
+
+/* -------------------------------------------------------------------------- */
+/* --- Combiner thread ------------------------------------------------------ */
+/* Retains latest partials and emits a full frame once per tick             */
 void combiner_thread(void)
 {
-    /* caches of last-seen values */
-    struct bme280_msg  bme = {0};
-    struct ens160_msg  ens = {0};
-    struct as7343_msg  as7 = {0};
-    struct batt_msg    bat = {.mV = 0};
-    struct sound_msg   snd = {0};
+    struct bme280_msg   bme   = {0};
+    struct ens160_msg   ens   = {0};
+    struct as7343_msg   as7   = {0};
+    struct batt_msg     bat   = {.mV = 0};
+    struct sound_msg    snd   = {0};
     struct moisture_msg moist = {0};
 
     bool have_bme=false, have_ens=false, have_as7=false, have_bat=false;
 
     const uint8_t PROTO_VER = 1;
-    const uint8_t DEV_ID    = DEV_ID;
+    const uint8_t DEV_ID    = DEVICE_ID;
 
     while (1) {
-        /* Non-blocking harvest of any new partials that arrived in the last cycle */
         if (k_msgq_get(&bme_q,      &bme,   K_NO_WAIT) == 0) have_bme = true;
         if (k_msgq_get(&ens_q,      &ens,   K_NO_WAIT) == 0) have_ens = true;
         if (k_msgq_get(&as7_q,      &as7,   K_NO_WAIT) == 0) have_as7 = true;
         if (k_msgq_get(&batt_q,     &bat,   K_NO_WAIT) == 0) have_bat = true;
-        (void)k_msgq_get(&sound_q,   &snd,   K_NO_WAIT);
+        (void)k_msgq_get(&sound_q,    &snd,   K_NO_WAIT);
         (void)k_msgq_get(&moisture_q, &moist, K_NO_WAIT);
 
-        /* Build a full sample every SAMPLE_PERIOD_MS (even if one partial is stale) */
         struct sensor_blk s = {0};
-        s.time       = time_sync_get_utc();                        // wall-clock unused
-        s.uptime_ms  = k_uptime_get_32();
-        s.proto_ver  = PROTO_VER;
-        s.dev_id     = DEV_ID;
+        uint16_t blk_utc_ms;
+        s.time      = time_sync_get_utc_ms(&blk_utc_ms);
+        s.time_ms   = blk_utc_ms;
+        s.uptime_ms = k_uptime_get_32();
+        s.proto_ver = PROTO_VER;
+        s.dev_id    = DEV_ID;
 
-        /* BME280 (scale for BLE packer) */
-        s.temp_c_x100   = (int16_t)(bme.temp_c   * 100.0);
-        s.rh_x100       = (int16_t)(bme.rh_pct   * 100.0);
+        s.temp_c_x100     = (int16_t)(bme.temp_c    * 100.0);
+        s.rh_x100         = (int16_t)(bme.rh_pct    * 100.0);
         s.press_hPa_x1000 = (int32_t)(bme.press_hPa * 1000.0);
 
-        /* ENS160 */
         s.eco2_ppm = (uint16_t)ens.eco2_ppm;
         s.tvoc_ppb = (uint16_t)ens.tvoc_ppb;
         s.aqi      = (uint8_t) ens.aqi;
-
 
         for (int i = 0; i < 12; ++i) {
             s.as7343[i] = as7.ch[i];
         }
 
-        /* Battery (MAX17048 fuel gauge) */
         s.batt_mV       = bat.mV;
         s.batt_pct      = bat.pct;
         s.batt_rate_x10 = bat.rate_x10;
 
-        /* Sound (SPH0645 FFT summary) */
         s.snd_rms_dbfs_x100 = snd.rms_dbfs_x100;
         s.snd_peak_freq_hz  = snd.peak_freq_hz;
         s.snd_peak_mag_x10  = snd.peak_mag_x10;
 
-        /* Soil moisture */
         s.soil_vwc_x100 = moist.vwc_x100;
 
-        /* Push the full sample (drop oldest if queue is full) */
         if (k_msgq_put(&full_q, &s, K_NO_WAIT) != 0) {
             struct sensor_blk dump;
             (void)k_msgq_get(&full_q, &dump, K_NO_WAIT);
             (void)k_msgq_put(&full_q, &s, K_NO_WAIT);
         }
 
-        k_msleep(SAMPLE_PERIOD_MS);  // e.g., 1000 ms tick
+        k_msleep(SAMPLE_PERIOD_MS);
     }
 }

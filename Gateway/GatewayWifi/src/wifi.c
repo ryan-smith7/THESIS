@@ -10,6 +10,7 @@
 #include <zephyr/net/wifi_mgmt.h>
 #include <zephyr/net/net_event.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/net/dns_resolve.h>
 #include <wifi.h>
 #include <env.h>
 
@@ -70,14 +71,16 @@ static void wifi_scan_result_cb(struct net_mgmt_event_callback *cb,
  * Event handlers
  * ----------------------------------------------------------------------- */
 
-static void handle_wifi_connect_result(struct net_mgmt_event_callback *cb)
-{
+static void handle_wifi_connect_result(struct net_mgmt_event_callback *cb) {
     const struct wifi_status *status = (const struct wifi_status *)cb->info;
 
     if (status->status) {
         LOG_ERR("Connection request failed (%d)", status->status);
     } else {
         LOG_INF("WiFi connected");
+        k_mutex_lock(&wifi_retry_mutex, K_FOREVER);
+        wifi_connection_retry_count = 0;
+        k_mutex_unlock(&wifi_retry_mutex);
         k_sem_give(&wifi_connected);
     }
 }
@@ -88,20 +91,16 @@ static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb)
 {
     const struct wifi_status *status = (const struct wifi_status *)cb->info;
 
-    if (status->status) {
-        LOG_ERR("Disconnection request (%d)", status->status);
+    LOG_INF("WiFi disconnected (status=%d) — reconnecting", status->status);
 
-        /* Spawn retry thread — never call wifi_connect from event handler
-         * context as it can deadlock the net mgmt event queue */
-        k_thread_create(&wifi_retry_thread_data, wifi_retry_stack,
-                        K_THREAD_STACK_SIZEOF(wifi_retry_stack),
-                        wifi_retry_thread_fn,
-                        NULL, NULL, NULL,
-                        K_PRIO_COOP(7), 0, K_NO_WAIT);
-    } else {
-        LOG_INF("WiFi disconnected");
-        k_sem_take(&wifi_connected, K_NO_WAIT);
-    }
+    k_sem_take(&wifi_connected, K_NO_WAIT);
+    got_ipv4 = false;
+
+    k_thread_create(&wifi_retry_thread_data, wifi_retry_stack,
+                    K_THREAD_STACK_SIZEOF(wifi_retry_stack),
+                    wifi_retry_thread_fn,
+                    NULL, NULL, NULL,
+                    K_PRIO_COOP(7), 0, K_NO_WAIT);
 }
 
 static void handle_ipv4_result(struct net_if *iface)
@@ -131,7 +130,6 @@ static void handle_ipv4_result(struct net_if *iface)
         LOG_INF("Gateway: %s", buf);
 
         got_ipv4 = true;
-        net_mgmt_del_event_callback(&ipv4_cb);
         k_sem_give(&ipv4_address_obtained);
         break;
     }
@@ -221,17 +219,8 @@ static void wifi_retry_thread_fn(void *a, void *b, void *c)
     uint8_t retry = wifi_connection_retry_count++;
     k_mutex_unlock(&wifi_retry_mutex);
 
-    if (retry >= WIFI_RETRY_COUNT) {
-        LOG_ERR("Max retries reached");
-        return;
-    }
-
-    /* Minimum 3 seconds to let iPhone stabilise BSSID after failed attempt,
-     * plus quadratic backoff to avoid hammering the AP */
-    uint32_t delay_ms = 3000 + (1000 * retry * retry);
-
-    LOG_INF("Retrying connection (%d) in %d ms", retry + 1, delay_ms);
-    k_msleep(delay_ms);
+    LOG_INF("Retrying WiFi connection (%d) in 5s", retry + 1);
+    k_msleep(5000);
 
     wifi_connect_with_bssid();
 }
@@ -239,20 +228,6 @@ static void wifi_retry_thread_fn(void *a, void *b, void *c)
 /* -------------------------------------------------------------------------
  * Public API
  * ----------------------------------------------------------------------- */
-
-void wifi_connection_retry_reset(void)
-{
-    net_mgmt_del_event_callback(&ipv4_cb);
-    net_mgmt_del_event_callback(&wifi_cb);
-    net_mgmt_del_event_callback(&l4_cb);
-    net_mgmt_del_event_callback(&scan_cb);
-
-    wifi_callbacks_init();
-
-    k_mutex_lock(&wifi_retry_mutex, K_FOREVER);
-    wifi_connection_retry_count = 0;
-    k_mutex_unlock(&wifi_retry_mutex);
-}
 
 void wifi_callbacks_init(void)
 {

@@ -1,8 +1,8 @@
 /*
  * azure_mqtt.c — MQTT client via Oracle plaintext bridge to Azure IoT Hub
  *
- * Single-threaded MQTT ownership — BLE thread queues messages,
- * azure_mqtt_thread dequeues and publishes. No mutex needed.
+ * Single-threaded MQTT ownership — BLE thread queues messages via ring
+ * buffer, azure_mqtt_thread dequeues and publishes. No fixed-slot waste.
  *
  * ESP32-WROOM workaround: BT + MbedTLS cannot coexist in 96KB dram1.
  * Production: ESP32-WROVER + direct TLS to Azure.
@@ -15,30 +15,43 @@
 #include <zephyr/net/mqtt.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/random/random.h>
+#include <zephyr/sys/ring_buffer.h>
+#include <zephyr/sys/mutex.h>
 #include <string.h>
 #include <errno.h>
 
 LOG_MODULE_REGISTER(azure_mqtt, LOG_LEVEL_INF);
 
-/* ── Message queue ───────────────────────────────────────── */
-/* BLE thread writes here, MQTT thread reads and publishes.
- * No shared MQTT client access from BLE thread at all. */
-#define MQTT_QUEUE_MAX_LEN   4096  /* max single message size */
-#define MQTT_QUEUE_DEPTH     2     /* max queued messages */
+/* ── Ring buffer ─────────────────────────────────────────── */
+/*
+ * Dynamic byte-level queue — each message prefixed with a 2-byte length
+ * header so the consumer can read variable-length messages cleanly.
+ *
+ * 8KB covers ~40 env msgs (200B), ~16 spectrum msgs (400B), or any mix.
+ *
+ * WiFi build:    buffer in SPIRAM  (.ext_ram.bss)
+ * Ethernet build: buffer in dram1  (.dram1.bss)
+ */
+#define MQTT_QUEUE_MAX_LEN   4096  /* max single message — sound JSON */
 
-struct mqtt_msg {
-    char   data[MQTT_QUEUE_MAX_LEN];
-    size_t len;
-};
+#if defined(CONFIG_ESP_SPIRAM)
+#define MQTT_RING_BUF_SIZE   2 * MQTT_QUEUE_MAX_LEN
+static uint8_t mqtt_ring_data[MQTT_RING_BUF_SIZE]
+    __attribute__((section(".ext_ram.bss")));
+#else
+#define MQTT_RING_BUF_SIZE   MQTT_QUEUE_MAX_LEN
+static uint8_t mqtt_ring_data[MQTT_RING_BUF_SIZE];
+#endif
 
-K_MSGQ_DEFINE(mqtt_msgq, sizeof(struct mqtt_msg), MQTT_QUEUE_DEPTH, 4);
+static struct ring_buf mqtt_ring;
+static struct k_mutex  mqtt_ring_mutex;
 
 /* ── MQTT client state ───────────────────────────────────── */
 static struct mqtt_client      client;
 static struct sockaddr_storage broker_addr;
 
 static uint8_t rx_buf[512];
-static uint8_t tx_buf[4608];   /* 4096 payload + 512 MQTT overhead */
+static uint8_t tx_buf[4608];            /* 4096 payload + 512 MQTT overhead */
 static uint8_t payload_buf[MQTT_QUEUE_MAX_LEN];
 
 #define AZURE_MQTT_STACK       6144
@@ -46,6 +59,11 @@ static uint8_t payload_buf[MQTT_QUEUE_MAX_LEN];
 #define RECONNECT_DELAY_MS     5000
 
 static bool connected = false;
+
+bool azure_mqtt_is_connected(void)
+{
+    return connected;
+}
 
 /* ── Event handler ───────────────────────────────────────── */
 static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt)
@@ -108,11 +126,8 @@ static int do_connect(void)
     snprintf(client_id_str, sizeof(client_id_str),
              "esp32-%08x", (uint32_t)k_uptime_get());
 
+    mqtt_abort(&client);
     mqtt_client_init(&client);
-    LOG_INF("tx_buf size: %zu", sizeof(tx_buf));
-    client.tx_buf      = tx_buf;
-    client.tx_buf_size = sizeof(tx_buf);
-    LOG_INF("client tx_buf_size set to: %u", client.tx_buf_size);
 
     client.broker           = &broker_addr;
     client.evt_cb           = mqtt_evt_handler;
@@ -160,7 +175,7 @@ int azure_mqtt_connect(void)
     return do_connect();
 }
 
-/* ── Publish (called from BLE thread — just enqueues) ────── */
+/* ── Publish (called from BLE thread — enqueues into ring buffer) ─────── */
 int azure_mqtt_publish(const char *json)
 {
     if (!connected) {
@@ -168,31 +183,41 @@ int azure_mqtt_publish(const char *json)
         return -ENOTCONN;
     }
 
-    size_t len = strlen(json);
-    if (len >= MQTT_QUEUE_MAX_LEN) {
-        LOG_ERR("Payload too large: %zu", len);
-        return -EMSGSIZE;
+    uint16_t len = (uint16_t)strlen(json);
+
+    k_mutex_lock(&mqtt_ring_mutex, K_FOREVER);
+
+    if (ring_buf_space_get(&mqtt_ring) < (uint32_t)(sizeof(len) + len)) {
+        k_mutex_unlock(&mqtt_ring_mutex);
+        LOG_WRN("Ring buffer full — message dropped (%u bytes)", len);
+        return -ENOMEM;
     }
 
-    struct mqtt_msg msg;
-    memcpy(msg.data, json, len);
-    msg.data[len] = '\0';
-    msg.len = len;
+    ring_buf_put(&mqtt_ring, (uint8_t *)&len, sizeof(len));
+    ring_buf_put(&mqtt_ring, (uint8_t *)json, len);
 
-    int ret = k_msgq_put(&mqtt_msgq, &msg, K_NO_WAIT);
-    if (ret < 0) {
-        LOG_WRN("MQTT queue full — message dropped");
-        return ret;
-    }
+    k_mutex_unlock(&mqtt_ring_mutex);
 
-    LOG_INF("Queued %zu bytes for publish", len);
+    LOG_INF("Queued %u bytes for publish", len);
     return 0;
 }
 
 /* ── Internal publish (called only from MQTT thread) ─────── */
-static int do_publish(const struct mqtt_msg *msg)
-{   
-    memcpy(payload_buf, msg->data, msg->len);
+static void do_publish(void)
+{
+    k_mutex_lock(&mqtt_ring_mutex, K_FOREVER);
+
+    uint16_t msg_len = 0;
+    if (ring_buf_get(&mqtt_ring, (uint8_t *)&msg_len, sizeof(msg_len))
+            != sizeof(msg_len)) {
+        k_mutex_unlock(&mqtt_ring_mutex);
+        return;
+    }
+
+    ring_buf_get(&mqtt_ring, payload_buf, msg_len);
+    k_mutex_unlock(&mqtt_ring_mutex);
+
+    payload_buf[msg_len] = '\0';
 
     struct mqtt_publish_param pub = {
         .message = {
@@ -205,7 +230,7 @@ static int do_publish(const struct mqtt_msg *msg)
             },
             .payload = {
                 .data = payload_buf,
-                .len  = msg->len,
+                .len  = msg_len,
             },
         },
         .message_id  = (uint16_t)sys_rand32_get(),
@@ -217,12 +242,11 @@ static int do_publish(const struct mqtt_msg *msg)
     if (ret < 0) {
         LOG_ERR("mqtt_publish failed: %d", ret);
         connected = false;
-        return ret;
+        return;
     }
 
     mqtt_live(&client);
-    LOG_INF("Published %zu bytes", msg->len);
-    return 0;
+    LOG_INF("Published %u bytes", msg_len);
 }
 
 /* ── Thread ──────────────────────────────────────────────── */
@@ -233,7 +257,9 @@ void azure_mqtt_thread(void)
 {
     LOG_INF("azure_mqtt_thread started");
 
-    struct mqtt_msg msg;
+    ring_buf_init(&mqtt_ring, MQTT_RING_BUF_SIZE, mqtt_ring_data);
+    k_mutex_init(&mqtt_ring_mutex);
+
     struct zsock_pollfd fds;
 
     while (true) {
@@ -242,16 +268,16 @@ void azure_mqtt_thread(void)
             LOG_INF("Connecting to Oracle MQTT bridge ...");
             int ret = azure_mqtt_connect();
             if (ret < 0) {
-                LOG_ERR("Connection failed (%d), retrying in %d s",
-                        ret, RECONNECT_DELAY_MS / 1000);
+                LOG_ERR("Connection failed (%d), retrying in %d ms",
+                        ret, RECONNECT_DELAY_MS);
                 k_sleep(K_MSEC(RECONNECT_DELAY_MS));
                 continue;
             }
         }
 
         /* Check for queued messages from BLE thread — non-blocking */
-        if (k_msgq_get(&mqtt_msgq, &msg, K_NO_WAIT) == 0) {
-            do_publish(&msg);
+        if (!ring_buf_is_empty(&mqtt_ring)) {
+            do_publish();
         }
 
         /* Poll for incoming MQTT packets and send keepalives */
@@ -261,7 +287,6 @@ void azure_mqtt_thread(void)
             mqtt_input(&client);
         }
         mqtt_live(&client);
-        LOG_DBG("mqtt_live called");  /* add this temporarily */
     }
 }
 

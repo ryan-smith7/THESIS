@@ -52,13 +52,15 @@ struct sound_msg {
  * bins[i] = averaged magnitude for bin (SOUND_BIN_LOW + i), scaled ×10
  * so uint16_t gives 0–6553.5 range — sufficient for ±131072 normalised mag.
  *
- * timestamp_ms: low 32 bits of uptime — lets the gateway reassemble
- * packets from the same second even if they arrive out of order.
+ * utc_sec + utc_ms: millisecond-precision UTC at measurement, stamped by
+ * sound_thread via time_sync_get_utc_ms(). utc_sec is 0 if unsynced.
+ * Used by gateway as reassembly key and forwarded to Azure as timestamp.
  */
 struct sound_spec_msg {
-    uint32_t timestamp_ms;
+    uint32_t utc_sec;              /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;               /* UTC milliseconds 0-999                    */
     int16_t  rms_dbfs_x100;
-    uint16_t bins[SOUND_NUM_BINS];   /* 348 × uint16_t = 696 bytes */
+    uint16_t bins[SOUND_NUM_BINS]; /* 348 × uint16_t = 696 bytes */
 };
 
 /* ── Message queues ─────────────────────────────────────── */

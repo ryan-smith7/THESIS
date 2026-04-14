@@ -29,7 +29,8 @@
 
 LOG_MODULE_REGISTER(sntp_sync, LOG_LEVEL_INF);
 
-#define SNTP_SERVER              "pool.ntp.org"
+// #define SNTP_SERVER              "pool.ntp.org"
+#define SNTP_SERVER "216.239.35.0" 
 #define SNTP_PORT                123
 #define SNTP_TIMEOUT_MS          5000
 #define SNTP_RESYNC_INTERVAL_S   60
@@ -121,6 +122,9 @@ static int do_sntp_query(uint32_t *utc_out, uint16_t *ms_out)
 static void sntp_thread(void)
 {
     LOG_INF("SNTP sync thread started");
+
+        /* Wait for network stack to fully settle after DHCP */
+    k_sleep(K_SECONDS(3));
 
     while (true) {
         uint32_t utc = 0;

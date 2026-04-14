@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sensor Log Converter</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;800&family=Syne+Mono&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0e0e10;color:#d8d8e8;font-family:'Syne',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 24px}
+h1{font-size:clamp(26px,4vw,42px);font-weight:800;color:#fff;letter-spacing:-.03em;margin-bottom:6px}
+.sub{font-family:'Syne Mono',monospace;font-size:13px;color:#555568;margin-bottom:40px}
+label.dropzone{width:100%;max-width:680px;border:2px dashed #252530;border-radius:14px;padding:48px 24px;text-align:center;display:block;cursor:pointer;transition:.2s;margin-bottom:24px}
+label.dropzone:hover{border-color:#7fff6e;background:#7fff6e06}
+label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
+.di{font-size:44px;margin-bottom:12px}
+.dt{font-size:17px;font-weight:600;color:#fff;margin-bottom:6px}
+.ds{font-family:'Syne Mono',monospace;font-size:12px;color:#555568;margin-top:4px}
+.ds span{color:#7fff6e}
+.files{width:100%;max-width:680px;display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.fc{background:#16161a;border:1px solid #252530;border-radius:10px;padding:14px 18px;display:flex;align-items:center;gap:14px}
+.badge{font-family:'Syne Mono',monospace;font-size:10px;font-weight:700;padding:3px 8px;border-radius:5px;text-transform:uppercase;letter-spacing:.1em;flex-shrink:0}
+.b0{background:#ff6e6e22;color:#ff9e9e;border:1px solid #ff6e6e44}
+.b1{background:#6eb8ff22;color:#8ecfff;border:1px solid #6eb8ff44}
+.b2{background:#b86eff22;color:#cc8eff;border:1px solid #b86eff44}
+.b3{background:#6effc022;color:#8effd0;border:1px solid #6effc044}
+.b4{background:#ff6eb022;color:#ff8ec8;border:1px solid #ff6eb044}
+.bx{background:#55556822;color:#555568;border:1px solid #333}
+.fi2{flex:1;min-width:0}
+.fn{font-family:'Syne Mono',monospace;font-size:13px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.fm{font-family:'Syne Mono',monospace;font-size:11px;color:#555568}
+.fs{font-family:'Syne Mono',monospace;font-size:11px;color:#7fff6e;flex-shrink:0}
+.fs.u{color:#555568}
+.rb{background:none;border:none;color:#555568;cursor:pointer;font-size:20px;padding:2px 6px;line-height:1;flex-shrink:0;transition:.15s}
+.rb:hover{color:#ff6e6e}
+
+/* Merge panel */
+.merge-panel{width:100%;max-width:680px;background:#16161a;border:1px solid #252530;border-radius:10px;padding:16px 20px;margin-bottom:16px;display:none}
+.merge-panel.visible{display:block}
+.merge-title{font-family:'Syne Mono',monospace;font-size:11px;color:#7fff6e;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
+.merge-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.merge-row label{font-family:'Syne Mono',monospace;font-size:11px;color:#d8d8e8;flex-shrink:0}
+.merge-input{background:#0e0e10;border:1px solid #353545;border-radius:6px;color:#d8d8e8;font-family:'Syne Mono',monospace;font-size:12px;padding:6px 10px;width:160px;outline:none}
+.merge-input:focus{border-color:#7fff6e}
+.merge-input-sm{background:#0e0e10;border:1px solid #353545;border-radius:6px;color:#d8d8e8;font-family:'Syne Mono',monospace;font-size:12px;padding:6px 8px;outline:none;text-align:center}
+.merge-input-sm:focus{border-color:#7fff6e}
+.toggle-group{display:flex;gap:0}
+.toggle-btn{background:#0e0e10;border:1px solid #353545;color:#555568;font-family:'Syne Mono',monospace;font-size:11px;padding:5px 14px;cursor:pointer;transition:.15s}
+.toggle-btn:first-child{border-radius:6px 0 0 6px}
+.toggle-btn:last-child{border-radius:0 6px 6px 0;border-left:none}
+.toggle-btn.active{background:#7fff6e22;border-color:#7fff6e;color:#7fff6e}
+.toggle-btn:hover:not(.active){border-color:#555568;color:#d8d8e8}
+.merge-hint{font-family:'Syne Mono',monospace;font-size:10px;color:#555568;flex:1;min-width:200px}
+.merge-pairs{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.merge-pair{font-family:'Syne Mono',monospace;font-size:11px;background:#0e0e1066;border:1px solid #252530;border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px}
+.pair-utc{color:#7fff6e}.pair-plus{color:#555568}.pair-upt{color:#6eb8ff}
+.pair-arrow{color:#555568;margin:0 4px}
+.pair-out{color:#fff}
+
+.cvt{width:100%;max-width:680px;padding:16px;background:#7fff6e;color:#000;border:none;border-radius:12px;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;transition:.15s;display:block;margin-bottom:8px}
+.cvt:hover:not(:disabled){background:#9fff90;transform:translateY(-1px)}
+.cvt:disabled{background:#252530;color:#555568;cursor:not-allowed}
+.log{width:100%;max-width:680px;margin-top:8px;background:#16161a;border:1px solid #252530;border-radius:10px;padding:14px;font-family:'Syne Mono',monospace;font-size:12px;max-height:220px;overflow-y:auto;display:none}
+.ll{padding:2px 0;color:#555568}.ok{color:#7fff6e}.er{color:#ff6e6e}.in{color:#6eb8ff}.mg{color:#b86eff}
+</style>
+</head>
+<body>
+<h1>Sensor Log Converter</h1>
+<div class="sub">// .bin &rarr; .csv &nbsp;|&nbsp; merge uptime + UTC</div>
+
+<label class="dropzone" id="dz" for="fi">
+  <div class="di">&#128225;</div>
+  <div class="dt">Click to browse or drop .bin files here</div>
+  <div class="ds">
+    UTC files: <span>bme280.bin</span> <span>ens160.bin</span> <span>as7343.bin</span> <span>moisture.bin</span> <span>sound.bin</span><br>
+    Uptime files: <span>bme####.bin</span> <span>ens####.bin</span> <span>as7####.bin</span> <span>mst####.bin</span> <span>snd####.bin</span>
+  </div>
+</label>
+<input type="file" id="fi" multiple style="display:none">
+
+<div class="files" id="fl"></div>
+
+<!-- Merge panel — shown when uptime + UTC pair detected -->
+<div class="merge-panel" id="mp">
+  <div class="merge-title">&#9889; Uptime &rarr; UTC Merge Detected</div>
+
+  <!-- Input mode toggle -->
+  <div class="merge-row" style="margin-bottom:14px">
+    <label>Offset input mode:</label>
+    <div class="toggle-group">
+      <button class="toggle-btn active" id="modeUnix" onclick="setMode('unix')">Unix seconds</button>
+      <button class="toggle-btn" id="modeDt" onclick="setMode('datetime')">Date &amp; time</button>
+    </div>
+  </div>
+
+  <!-- Unix seconds input -->
+  <div class="merge-row" id="rowUnix">
+    <label>UTC at boot (seconds):</label>
+    <input type="number" class="merge-input" id="offsetUnix" placeholder="e.g. 1776135432" step="1">
+    <span class="merge-hint">Unix timestamp corresponding to uptime=0 on the sensor node</span>
+  </div>
+
+  <!-- Datetime input -->
+  <div class="merge-row" id="rowDt" style="display:none;flex-wrap:wrap;gap:8px">
+    <label style="width:100%">UTC boot time:</label>
+    <input type="number" class="merge-input-sm" id="dtDay"   placeholder="DD"   min="1"  max="31"  style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtMonth" placeholder="MM"   min="1"  max="12"  style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtYear"  placeholder="YYYY" min="2020" max="2099" style="width:76px">
+    <input type="number" class="merge-input-sm" id="dtHour"  placeholder="HH"   min="0"  max="23"  style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtMin"   placeholder="MM"   min="0"  max="59"  style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtSec"   placeholder="SS"   min="0"  max="59"  style="width:56px">
+    <span class="merge-hint" style="width:100%">Day / Month / Year &nbsp; Hour : Minute : Second (UTC)</span>
+  </div>
+
+  <!-- Resolved preview -->
+  <div class="merge-row" id="offsetPreview" style="margin-top:4px;display:none">
+    <span style="font-family:'Syne Mono',monospace;font-size:11px;color:#555568">Resolved: </span>
+    <span style="font-family:'Syne Mono',monospace;font-size:11px;color:#7fff6e" id="offsetResolved"></span>
+  </div>
+
+  <div class="merge-pairs" id="mergePairs"></div>
+</div>
+
+<button class="cvt" id="cb" disabled>Convert &amp; Download CSV</button>
+<div class="log" id="lg"></div>
+
+<script>
+// ── Parser definitions ────────────────────────────────────────────────────
+//
+// Naming conventions:
+//   UTC files:    bme280.bin, ens160.bin, as7343.bin, moisture.bin, sound.bin
+//   Uptime files: bme####.bin, ens####.bin, as7####.bin, mst####.bin, snd####.bin
+//
+// Struct sizes (with C alignment padding):
+//   bme280:   32 bytes  (double×3 + uint32 + uint16 + 2pad)
+//   ens160:   20 bytes  (int32×3 + uint32 + uint16 + 2pad)
+//   as7343:   36 bytes  (uint16×13 + 2pad + uint32 + uint16 + 2pad)
+//   moisture: 12 bytes  (uint16 + 2pad + uint32 + uint16 + 2pad)
+//   sound:   704 bytes  (uint32 + uint16 + int16 + uint16×348)
+//   sound old: 702 bytes (uint32 + int16 + uint16×348 — no utc_ms)
+
+const UTC_MIN = 1700000000;
+
+function fmtDt(s, ms) {
+  if (s > UTC_MIN) {
+    return new Date((s + ms/1000)*1000).toISOString().replace('T',' ').replace('Z','').slice(0,23);
+  }
+  if (s > 0) {
+    return 'unsynced(' + s + '.' + String(ms).padStart(3,'0') + ')';
+  }
+  return 'unsynced';
+}
+
+// Apply UTC offset to a record: utc_sec = uptime_sec + offset
+function applyOffset(rec, offsetSec) {
+  const newSec = rec.s + Math.floor(offsetSec);
+  const newMs  = rec.ms; // ms part stays the same
+  return Object.assign({}, rec, { s: newSec, ms: newMs });
+}
+
+const MODALITIES = {
+  bme: {
+    label:'bme280', cls:'b0', recSz:32,
+    utcName: 'bme280.bin',
+    uptPattern: /^bme\d+\.bin$/,
+    parse(b) {
+      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/32);
+      for(let i=0;i<N;i++){
+        const o=i*32;
+        r.push({
+          temp: d.getFloat64(o,true),
+          rh:   d.getFloat64(o+8,true),
+          press:d.getFloat64(o+16,true),
+          s:    d.getUint32(o+24,true),
+          ms:   d.getUint16(o+28,true)
+        });
+      }
+      return r;
+    },
+    csv(rows) {
+      const l=['datetime,utc_sec,utc_ms,temp_c,rh_pct,press_hPa'];
+      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.temp.toFixed(2),x.rh.toFixed(2),x.press.toFixed(3)].join(',')));
+      return l.join('\n');
+    },
+    bin(rows) {
+      const buf=new ArrayBuffer(rows.length*32), d=new DataView(buf);
+      rows.forEach((x,i)=>{
+        const o=i*32;
+        d.setFloat64(o,   x.temp, true);
+        d.setFloat64(o+8, x.rh,   true);
+        d.setFloat64(o+16,x.press,true);
+        d.setUint32(o+24, x.s,    true);
+        d.setUint16(o+28, x.ms,   true);
+      });
+      return buf;
+    }
+  },
+  ens: {
+    label:'ens160', cls:'b1', recSz:20,
+    utcName: 'ens160.bin',
+    uptPattern: /^ens\d+\.bin$/,
+    parse(b) {
+      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/20);
+      for(let i=0;i<N;i++){
+        const o=i*20;
+        r.push({
+          eco2:d.getInt32(o,true),
+          tvoc:d.getInt32(o+4,true),
+          aqi: d.getInt32(o+8,true),
+          s:   d.getUint32(o+12,true),
+          ms:  d.getUint16(o+16,true)
+        });
+      }
+      return r;
+    },
+    csv(rows) {
+      const l=['datetime,utc_sec,utc_ms,eco2_ppm,tvoc_ppb,aqi'];
+      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.eco2,x.tvoc,x.aqi].join(',')));
+      return l.join('\n');
+    },
+    bin(rows) {
+      const buf=new ArrayBuffer(rows.length*20), d=new DataView(buf);
+      rows.forEach((x,i)=>{
+        const o=i*20;
+        d.setInt32(o,   x.eco2,true);
+        d.setInt32(o+4, x.tvoc,true);
+        d.setInt32(o+8, x.aqi, true);
+        d.setUint32(o+12,x.s,  true);
+        d.setUint16(o+16,x.ms, true);
+      });
+      return buf;
+    }
+  },
+  as7: {
+    label:'as7343', cls:'b2', recSz:36,
+    utcName: 'as7343.bin',
+    uptPattern: /^as7\d+\.bin$/,
+    parse(b) {
+      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/36);
+      for(let i=0;i<N;i++){
+        const o=i*36, ch=[];
+        for(let c=0;c<13;c++) ch.push(d.getUint16(o+c*2,true));
+        r.push({ ch, s:d.getUint32(o+28,true), ms:d.getUint16(o+32,true) });
+      }
+      return r;
+    },
+    csv(rows) {
+      const wl='405nm,425nm,450nm,475nm,515nm,550nm,555nm,600nm,640nm,690nm,745nm,855nm,visible';
+      const l=[`datetime,utc_sec,utc_ms,${wl}`];
+      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,...x.ch].join(',')));
+      return l.join('\n');
+    },
+    bin(rows) {
+      const buf=new ArrayBuffer(rows.length*36), d=new DataView(buf);
+      rows.forEach((x,i)=>{
+        const o=i*36;
+        for(let c=0;c<13;c++) d.setUint16(o+c*2,x.ch[c],true);
+        // 2 bytes padding at o+26
+        d.setUint32(o+28,x.s, true);
+        d.setUint16(o+32,x.ms,true);
+      });
+      return buf;
+    }
+  },
+  mst: {
+    label:'moisture', cls:'b3', recSz:12,
+    utcName: 'moisture.bin',
+    uptPattern: /^mst\d+\.bin$/,
+    parse(b) {
+      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/12);
+      for(let i=0;i<N;i++){
+        const o=i*12;
+        r.push({ vwc:d.getUint16(o,true)/100, s:d.getUint32(o+4,true), ms:d.getUint16(o+8,true) });
+      }
+      return r;
+    },
+    csv(rows) {
+      const l=['datetime,utc_sec,utc_ms,vwc_percent'];
+      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.vwc.toFixed(2)].join(',')));
+      return l.join('\n');
+    },
+    bin(rows) {
+      const buf=new ArrayBuffer(rows.length*12), d=new DataView(buf);
+      rows.forEach((x,i)=>{
+        const o=i*12;
+        d.setUint16(o,   Math.round(x.vwc*100), true);
+        // 2 bytes padding at o+2
+        d.setUint32(o+4, x.s,  true);
+        d.setUint16(o+8, x.ms, true);
+      });
+      return buf;
+    }
+  },
+  snd: {
+    label:'sound', cls:'b4',
+    utcName: 'sound.bin',
+    uptPattern: /^snd\d+\.bin$/,
+    // auto-detect 702 (old, no utc_ms) vs 704 (new)
+    getRecSz(sz) { return sz%704===0 ? 704 : sz%702===0 ? 702 : null; },
+    get recSz() { return 704; },
+    parse(b) {
+      const sz = b.byteLength%704===0 ? 704 : 702;
+      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/sz);
+      for(let i=0;i<N;i++){
+        const o=i*sz;
+        let s,ms,rms,boff;
+        if(sz===704){ s=d.getUint32(o,true); ms=d.getUint16(o+4,true); rms=d.getInt16(o+6,true)/100; boff=o+8; }
+        else         { s=d.getUint32(o,true); ms=0;                      rms=d.getInt16(o+4,true)/100; boff=o+6; }
+        const bins=[];
+        for(let j=0;j<348;j++) bins.push(d.getUint16(boff+j*2,true));
+        r.push({s,ms,rms,bins});
+      }
+      return r;
+    },
+    csv(rows) {
+      const bh=Array.from({length:348},(_,i)=>`bin${i+1}_${Math.round((i+1)*43.1)}hz`).join(',');
+      const l=[`datetime,utc_sec,utc_ms,rms_dbfs,${bh}`];
+      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.rms.toFixed(2),...x.bins.map(v=>(v/10).toFixed(1))].join(',')));
+      return l.join('\n');
+    },
+    bin(rows) {
+      const buf=new ArrayBuffer(rows.length*704), d=new DataView(buf);
+      rows.forEach((x,i)=>{
+        const o=i*704;
+        d.setUint32(o,   x.s,  true);
+        d.setUint16(o+4, x.ms, true);
+        d.setInt16(o+6,  Math.round(x.rms*100), true);
+        for(let j=0;j<348;j++) d.setUint16(o+8+j*2, x.bins[j], true);
+      });
+      return buf;
+    }
+  }
+};
+
+// Build lookup: filename → {modality, isUtc, isUpt}
+function classifyName(name) {
+  for (const [key, m] of Object.entries(MODALITIES)) {
+    if (name === m.utcName) return { mod: key, isUtc: true,  isUpt: false };
+    if (m.uptPattern.test(name)) return { mod: key, isUtc: false, isUpt: true  };
+  }
+  return null;
+}
+
+function getRecSz(key, fileSize) {
+  const m = MODALITIES[key];
+  if (key === 'snd') {
+    return fileSize%704===0 ? 704 : fileSize%702===0 ? 702 : null;
+  }
+  return fileSize % m.recSz === 0 ? m.recSz : null;
+}
+
+// ── State ─────────────────────────────────────────────────────────────────
+const fileMap = new Map(); // name → { file, cls, modKey, isUtc, isUpt, recSz, recs }
+
+const dz  = document.getElementById('dz');
+const fi  = document.getElementById('fi');
+const fl  = document.getElementById('fl');
+const cb  = document.getElementById('cb');
+const lg  = document.getElementById('lg');
+const mp  = document.getElementById('mp');
+const mergePairs  = document.getElementById('mergePairs');
+
+fi.addEventListener('change', function() {
+  if (this.files && this.files.length > 0) { processFiles(Array.from(this.files)); }
+  this.value = '';
+});
+dz.addEventListener('dragenter', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', e => { if (!dz.contains(e.relatedTarget)) dz.classList.remove('over'); });
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); processFiles(Array.from(e.dataTransfer.files)); });
+cb.addEventListener('click', doConvert);
+
+function processFiles(list) {
+  list.forEach(f => {
+    const name = f.name.toLowerCase();
+    if (!name.endsWith('.bin')) return;
+    const cls = classifyName(name);
+    if (!cls) {
+      fileMap.set(name, { file:f, modKey:null, isUtc:false, isUpt:false, recs:'?', err:'unrecognised' });
+      return;
+    }
+    const recSz = getRecSz(cls.mod, f.size);
+    if (!recSz) {
+      fileMap.set(name, { file:f, modKey:cls.mod, isUtc:cls.isUtc, isUpt:cls.isUpt, recs:'?', err:'unrecognised size' });
+      return;
+    }
+    fileMap.set(name, {
+      file:f, modKey:cls.mod, isUtc:cls.isUtc, isUpt:cls.isUpt,
+      recSz, recs: Math.floor(f.size/recSz), err:null
+    });
+  });
+  render();
+  updateMergePanel();
+}
+
+function removeFile(name) { fileMap.delete(name); render(); updateMergePanel(); }
+
+function render() {
+  fl.innerHTML = '';
+  fileMap.forEach((info, name) => {
+    const m = info.modKey ? MODALITIES[info.modKey] : null;
+    const known = m && !info.err;
+    const tag = info.isUtc ? 'UTC' : info.isUpt ? 'UPT' : '';
+    const div = document.createElement('div');
+    div.className = 'fc';
+    div.innerHTML = `
+      <span class="badge ${known ? m.cls : 'bx'}">${known ? m.label : 'unknown'}</span>
+      <div class="fi2">
+        <div class="fn">${name} ${tag ? '<span style="font-size:10px;color:'+(info.isUtc?'#7fff6e':'#6eb8ff')+'">['+ tag +']</span>' : ''}</div>
+        <div class="fm">${(info.file.size/1024).toFixed(1)} KB &nbsp;&middot;&nbsp; ${known ? info.recSz+'b/rec' : info.err||'?'}</div>
+      </div>
+      <span class="fs ${known?'':'u'}">${known ? info.recs+' records' : '?'}</span>
+      <button class="rb" data-name="${name}">&times;</button>
+    `;
+    div.querySelector('.rb').addEventListener('click', () => removeFile(name));
+    fl.appendChild(div);
+  });
+  cb.disabled = fileMap.size === 0;
+}
+
+// Find UTC+UPT pairs for the merge panel
+function findPairs() {
+  const pairs = [];
+  const utcFiles = new Map();
+  const uptFiles = new Map();
+  fileMap.forEach((info, name) => {
+    if (!info.modKey || info.err) return;
+    if (info.isUtc) utcFiles.set(info.modKey, name);
+    if (info.isUpt) uptFiles.set(info.modKey, name);
+  });
+  utcFiles.forEach((utcName, mod) => {
+    if (uptFiles.has(mod)) {
+      pairs.push({ mod, utcName, uptName: uptFiles.get(mod) });
+    }
+  });
+  return pairs;
+}
+
+function updateMergePanel() {
+  const pairs = findPairs();
+  if (pairs.length === 0) {
+    mp.classList.remove('visible');
+    return;
+  }
+  mp.classList.add('visible');
+  mergePairs.innerHTML = '';
+  pairs.forEach(p => {
+    const m = MODALITIES[p.mod];
+    const div = document.createElement('div');
+    div.className = 'merge-pair';
+    div.innerHTML = `
+      <span class="badge ${m.cls}">${m.label}</span>
+      <span class="pair-utc">${p.utcName}</span>
+      <span class="pair-plus">+</span>
+      <span class="pair-upt">${p.uptName}</span>
+      <span class="pair-arrow">&rarr;</span>
+      <span class="pair-out">${p.utcName.replace('.bin','_merged.csv')}</span>
+    `;
+    mergePairs.appendChild(div);
+  });
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────
+function logLine(msg, cls='') {
+  lg.style.display = 'block';
+  const d = document.createElement('div');
+  d.className = 'll ' + cls;
+  d.textContent = '[' + new Date().toTimeString().slice(0,8) + '] ' + msg;
+  lg.appendChild(d);
+  lg.scrollTop = lg.scrollHeight;
+}
+
+// ── Download ──────────────────────────────────────────────────────────────
+// ── Offset input mode ────────────────────────────────────────────────────
+let currentMode = 'unix';
+
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('modeUnix').classList.toggle('active', mode==='unix');
+  document.getElementById('modeDt').classList.toggle('active', mode==='datetime');
+  document.getElementById('rowUnix').style.display = mode==='unix' ? 'flex' : 'none';
+  document.getElementById('rowDt').style.display   = mode==='datetime' ? 'flex' : 'none';
+  updatePreview();
+}
+
+function getOffsetSec() {
+  if (currentMode === 'unix') {
+    return parseFloat(document.getElementById('offsetUnix').value) || 0;
+  } else {
+    const day   = parseInt(document.getElementById('dtDay').value)   || 0;
+    const month = parseInt(document.getElementById('dtMonth').value) || 0;
+    const year  = parseInt(document.getElementById('dtYear').value)  || 0;
+    const hour  = parseInt(document.getElementById('dtHour').value)  || 0;
+    const min   = parseInt(document.getElementById('dtMin').value)   || 0;
+    const sec   = parseInt(document.getElementById('dtSec').value)   || 0;
+    if (!day || !month || !year) return 0;
+    return Date.UTC(year, month-1, day, hour, min, sec) / 1000;
+  }
+}
+
+function updatePreview() {
+  const sec = getOffsetSec();
+  const preview = document.getElementById('offsetPreview');
+  const resolved = document.getElementById('offsetResolved');
+  if (sec > UTC_MIN) {
+    const d = new Date(sec*1000);
+    resolved.textContent = sec + 's  →  ' + d.toISOString().replace('T',' ').replace('Z','') + ' UTC';
+    preview.style.display = 'flex';
+  } else {
+    preview.style.display = 'none';
+  }
+}
+
+// Listen for changes on all offset inputs
+['offsetUnix','dtDay','dtMonth','dtYear','dtHour','dtMin','dtSec'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updatePreview);
+});
+
+function download(filename, csv) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 200);
+}
+
+function downloadBin(filename, arrayBuffer) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([arrayBuffer], {type:'application/octet-stream'}));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 200);
+}
+
+// ── Convert ───────────────────────────────────────────────────────────────
+async function doConvert() {
+  lg.innerHTML = '';
+  lg.style.display = 'block';
+  let ok=0, err=0;
+
+  const pairs = findPairs();
+  const mergedMods = new Set(pairs.map(p => p.mod));
+  const offsetSec = getOffsetSec();
+  const hasOffset = offsetSec > UTC_MIN;
+
+  // ── Step 1: handle merges first ──────────────────────────────────────
+  for (const pair of pairs) {
+    if (!hasOffset) {
+      logLine('SKIP merge ' + pair.utcName + ' — no UTC offset entered', 'er');
+      err++;
+      continue;
+    }
+
+    try {
+      const m = MODALITIES[pair.mod];
+      const utcInfo = fileMap.get(pair.utcName);
+      const uptInfo = fileMap.get(pair.uptName);
+
+      logLine('Merging ' + pair.uptName + ' into ' + pair.utcName + '...', 'mg');
+
+      const utcBuf = await utcInfo.file.arrayBuffer();
+      const uptBuf = await uptInfo.file.arrayBuffer();
+
+      let utcRows = m.parse(utcBuf);
+      let uptRows = m.parse(uptBuf);
+
+      // Apply offset to uptime rows
+      uptRows = uptRows.map(r => applyOffset(r, offsetSec));
+
+      // Merge and sort by timestamp
+      const merged = [...utcRows, ...uptRows].sort((a,b) => {
+        const ta = a.s + a.ms/1000;
+        const tb = b.s + b.ms/1000;
+        return ta - tb;
+      });
+
+      logLine('Merged: ' + utcRows.length + ' UTC + ' + uptRows.length + ' uptime = ' + merged.length + ' total', 'ok');
+
+      const outName = pair.utcName.replace('.bin', '_merged.csv');
+      download(outName, m.csv(merged));
+      logLine('Downloaded ' + outName, 'ok');
+
+      // Also download merged .bin with corrected UTC timestamps
+      const binName = pair.utcName.replace('.bin', '_merged.bin');
+      downloadBin(binName, m.bin(merged));
+      logLine('Downloaded ' + binName, 'ok');
+      ok++;
+    } catch(e) {
+      logLine('ERROR merging ' + pair.utcName + ': ' + e.message, 'er');
+      err++;
+    }
+  }
+
+  // ── Step 2: convert remaining files individually ──────────────────────
+  for (const [name, info] of fileMap) {
+    // Skip files that were part of a merge
+    if (info.modKey && mergedMods.has(info.modKey) && (info.isUtc || info.isUpt)) {
+      continue;
+    }
+    if (!info.modKey || info.err) {
+      logLine('SKIP ' + name + (info.err ? ' — ' + info.err : ''), 'er');
+      err++;
+      continue;
+    }
+
+    try {
+      const m = MODALITIES[info.modKey];
+      logLine('Reading ' + name + '...', 'in');
+      const buf  = await info.file.arrayBuffer();
+      let rows = m.parse(buf);
+
+      // Apply offset if this is an uptime file and offset is provided
+      if (info.isUpt && hasOffset) {
+        rows = rows.map(r => applyOffset(r, offsetSec));
+        logLine('Applied UTC offset ' + offsetSec + 's to ' + rows.length + ' records', 'mg');
+      }
+
+      logLine('Parsed ' + rows.length + ' records', 'ok');
+      const outName = name.replace('.bin', '.csv');
+      download(outName, m.csv(rows));
+      logLine('Downloaded ' + outName + ' (' + rows.length + ' rows)', 'ok');
+      ok++;
+    } catch(e) {
+      logLine('ERROR ' + name + ': ' + e.message, 'er');
+      err++;
+    }
+  }
+
+  logLine('Done — ' + ok + ' converted, ' + err + ' errors', ok>0?'ok':'er');
+}
+</script>
+</body>
+</html>

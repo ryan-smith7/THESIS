@@ -1,0 +1,25 @@
+mainmenu "Sensor Node Configuration"
+
+source "Kconfig.zephyr"
+
+choice SENSOR_NODE
+    prompt "Sensor node type"
+    default SENSOR_NODE_1
+
+config SENSOR_NODE_1
+    bool "Sensor Node 1 (BME280 + ENS160 + Sound)"
+    help
+      Enables BME280 temperature/humidity/pressure,
+      ENS160 eCO2/TVOC/AQI, and SPH0645 sound FFT threads.
+
+config SENSOR_NODE_2
+    bool "Sensor Node 2 (AS7343 + Moisture)"
+    help
+      Enables AS7343 light spectrum and capacitive
+      soil moisture sensor threads.
+
+endchoice
+
+config SD_LOGGING
+    bool "Enable SD card offline logging when BLE is unavailable"
+    default n

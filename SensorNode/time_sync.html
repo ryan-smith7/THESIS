@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sensor Time Sync</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@300;500;700&display=swap');
+
+  :root {
+    --bg: #0a0f0a;
+    --surface: #111811;
+    --border: #1e2e1e;
+    --green: #00ff88;
+    --green-dim: #00ff8833;
+    --green-mid: #00cc66;
+    --amber: #ffaa00;
+    --red: #ff4444;
+    --text: #c8e6c8;
+    --muted: #4a6a4a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Grotesk', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, #00ff8811 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px 28px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--green), transparent);
+    opacity: 0.6;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+
+  .pulse-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+
+  .pulse-dot.active {
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .pulse-dot.error { background: var(--red); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  h1 {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #e8f5e8;
+  }
+
+  .subtitle {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .status-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+
+  .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+  }
+
+  .status-row + .status-row {
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+
+  .label { color: var(--muted); }
+
+  .value {
+    color: var(--green);
+    font-weight: 700;
+    text-align: right;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .value.amber { color: var(--amber); }
+  .value.red   { color: var(--red); }
+  .value.dim   { color: var(--muted); }
+
+  .timestamp-display {
+    background: var(--green-dim);
+    border: 1px solid var(--green-mid);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  .ts-label {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+  }
+
+  .ts-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--green);
+    letter-spacing: 0.05em;
+    line-height: 1;
+  }
+
+  .ts-human {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .btn {
+    width: 100%;
+    padding: 16px;
+    border-radius: 10px;
+    border: none;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+  }
+
+  .btn-connect {
+    background: var(--green);
+    color: #000;
+    margin-bottom: 10px;
+  }
+
+  .btn-connect:hover { background: #00ffaa; transform: translateY(-1px); }
+  .btn-connect:active { transform: translateY(0); }
+  .btn-connect:disabled {
+    background: var(--border);
+    color: var(--muted);
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .btn-disconnect {
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--red);
+  }
+
+  .btn-disconnect:hover { background: #ff444422; }
+
+  .log {
+    margin-top: 20px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    max-height: 140px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+
+  .log-entry {
+    padding: 2px 0;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .log-entry.ok  { color: var(--green-mid); }
+  .log-entry.err { color: var(--red); }
+  .log-entry.info { color: var(--amber); }
+
+  .log::-webkit-scrollbar { width: 4px; }
+  .log::-webkit-scrollbar-track { background: transparent; }
+  .log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .counter {
+    display: inline-block;
+    background: var(--green-dim);
+    border: 1px solid var(--green-mid);
+    color: var(--green);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+  }
+
+  .not-supported {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--red);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="card" id="main-card">
+
+  <!-- Not supported message (hidden by default) -->
+  <div class="not-supported" id="not-supported" style="display:none">
+    ⚠ Web Bluetooth not supported<br>
+    <span style="color:var(--muted);font-size:12px">Use Chrome on Android</span>
+  </div>
+
+  <div id="app-content">
+    <!-- Header -->
+    <div class="header">
+      <div class="pulse-dot" id="dot"></div>
+      <div>
+        <h1>Sensor Time Sync</h1>
+        <div class="subtitle">BLE UTC broadcaster</div>
+      </div>
+    </div>
+
+    <!-- Live timestamp -->
+    <div class="timestamp-display">
+      <div class="ts-label">Current Unix Time</div>
+      <div class="ts-value" id="ts-unix">—</div>
+      <div class="ts-human" id="ts-human">—</div>
+    </div>
+
+    <!-- Connection status -->
+    <div class="status-box">
+      <div class="status-row">
+        <span class="label">Status</span>
+        <span class="value dim" id="status-val">Disconnected</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Device</span>
+        <span class="value dim" id="device-val">—</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Syncs sent</span>
+        <span class="value" id="sync-count">0</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Interval</span>
+        <select id="interval-select" onchange="updateInterval()" style="
+          background: var(--bg);
+          color: var(--green);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 4px 8px;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          outline: none;
+        ">
+          <option value="500">500 ms</option>
+          <option value="1000" selected>1000 ms</option>
+          <option value="2000">2000 ms</option>
+          <option value="5000">5000 ms</option>
+          <option value="10000">10000 ms</option>
+          <option value="30000">30000 ms</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Buttons -->
+    <button class="btn btn-connect" id="btn-connect" onclick="connectBLE()">
+      Connect &amp; Sync
+    </button>
+    <button class="btn btn-disconnect" id="btn-disconnect" onclick="disconnectBLE()" style="display:none">
+      Disconnect
+    </button>
+
+    <!-- Log -->
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+// ── Configuration ─────────────────────────────────────────────────────────
+//
+// Service UUID:        78563412-3412-7856-7856-123456781234
+// Characteristic UUID: AABBCCDD-EEFF-0011-2233-445566778899
+//
+// Packet format (7 bytes):
+//   [0]    0xFE  — TIMESYNC_MAGIC
+//   [1-4]  utc_sec  uint32 little-endian
+//   [5-6]  utc_ms   uint16 little-endian
+
+const SERVICE_UUID        = 'aabbccdd-eeff-0011-2233-445566778899'; // primary service
+const CHARACTERISTIC_UUID = 'aabbccdd-eeff-0011-2233-445566778899'; // writable char
+
+// ── Actual UUIDs from bluetooth.c ────────────────────────────────────────
+// Service UUID bytes (little-endian): 12 34 56 78 12 34 56 78 12 34 56 78 ...
+// Need full 16 bytes — update these with your actual values:
+const SVC_UUID  = 'f0debc9a-7856-3412-7856-341278563412';
+const CHAR_UUID = 'aabbccdd-eeff-0011-2233-445566778899';
+
+// ── State ────────────────────────────────────────────────────────────────
+let device     = null;
+let server     = null;
+let charHandle = null;
+let syncTimer  = null;
+let syncCount  = 0;
+
+// ── UI helpers ───────────────────────────────────────────────────────────
+function log(msg, type = '') {
+  const el = document.getElementById('log');
+  const entry = document.createElement('div');
+  const now = new Date().toTimeString().slice(0, 8);
+  entry.className = 'log-entry ' + type;
+  entry.textContent = `[${now}] ${msg}`;
+  el.appendChild(entry);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(text, color = 'dim') {
+  const el = document.getElementById('status-val');
+  el.textContent = text;
+  el.className = 'value ' + color;
+}
+
+function setDot(state) {
+  const dot = document.getElementById('dot');
+  dot.className = 'pulse-dot ' + (state === 'active' ? 'active' : state === 'error' ? 'error' : '');
+}
+
+// ── Timestamp builder ────────────────────────────────────────────────────
+function buildPacket() {
+  const now    = Date.now();
+  const sec    = Math.floor(now / 1000);
+  const ms     = now % 1000;
+  const buf    = new ArrayBuffer(7);
+  const view   = new DataView(buf);
+  view.setUint8(0,  0xFE);           // TIMESYNC_MAGIC
+  view.setUint32(1, sec, true);      // utc_sec  little-endian
+  view.setUint16(5, ms,  true);      // utc_ms   little-endian
+  return buf;
+}
+
+// ── Live clock ───────────────────────────────────────────────────────────
+function updateClock() {
+  const now = Date.now();
+  document.getElementById('ts-unix').textContent = Math.floor(now / 1000);
+  document.getElementById('ts-human').textContent = new Date(now).toUTCString().replace('GMT', 'UTC');
+}
+setInterval(updateClock, 100);
+updateClock();
+
+// ── Interval control ─────────────────────────────────────────────────────
+function updateInterval() {
+  const ms = parseInt(document.getElementById('interval-select').value);
+  if (syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = setInterval(sendSync, ms);
+    log(`Interval changed to ${ms} ms`, 'info');
+  }
+}
+
+// ── BLE connect ──────────────────────────────────────────────────────────
+async function connectBLE() {
+  if (!navigator.bluetooth) {
+    log('Web Bluetooth not supported — use Chrome on Android', 'err');
+    return;
+  }
+
+  try {
+    setStatus('Scanning...', 'amber');
+    log('Scanning for sensor node...', 'info');
+
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SVC_UUID]
+    });
+
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    document.getElementById('device-val').textContent = device.name || 'Unknown';
+    log(`Found: ${device.name || 'Unknown'}`, 'info');
+
+    setStatus('Connecting...', 'amber');
+    server = await device.gatt.connect();
+    log('GATT connected', 'ok');
+
+    const service = await server.getPrimaryService(SVC_UUID);
+    charHandle    = await service.getCharacteristic(CHAR_UUID);
+    log('Time sync characteristic found', 'ok');
+
+    // Start sending
+    syncCount = 0;
+    document.getElementById('sync-count').textContent = 0;
+    syncTimer = setInterval(sendSync, parseInt(document.getElementById('interval-select').value));
+    await sendSync(); // send immediately
+
+    setStatus('Syncing', 'ok');
+    setDot('active');
+    document.getElementById('btn-connect').style.display    = 'none';
+    document.getElementById('btn-disconnect').style.display = 'block';
+
+  } catch (err) {
+    log(`Error: ${err.message}`, 'err');
+    setStatus('Failed', 'red');
+    setDot('error');
+  }
+}
+
+// ── Send one sync packet ─────────────────────────────────────────────────
+async function sendSync() {
+  if (!charHandle) return;
+  try {
+    await charHandle.writeValue(buildPacket());
+    syncCount++;
+    document.getElementById('sync-count').textContent = syncCount;
+  } catch (err) {
+    log(`Write failed: ${err.message}`, 'err');
+  }
+}
+
+// ── Disconnect ───────────────────────────────────────────────────────────
+function disconnectBLE() {
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+  if (device && device.gatt.connected) {
+    device.gatt.disconnect();
+  }
+}
+
+function onDisconnected() {
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+  charHandle = null;
+  setStatus('Disconnected', 'dim');
+  setDot('');
+  document.getElementById('btn-connect').style.display    = 'block';
+  document.getElementById('btn-disconnect').style.display = 'none';
+  document.getElementById('device-val').textContent = '—';
+  log('Disconnected', 'err');
+}
+
+// ── Check support ────────────────────────────────────────────────────────
+if (!navigator.bluetooth) {
+  document.getElementById('not-supported').style.display = 'block';
+  document.getElementById('app-content').style.display   = 'none';
+}
+</script>
+</body>
+</html>

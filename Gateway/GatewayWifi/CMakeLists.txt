@@ -17,5 +17,3 @@ target_sources(app PRIVATE
     ../common/src/sntp_sync.c
     ../common/src/time_sync_writer.c
 )
-
-zephyr_linker_sources(RAM_SECTIONS ${CMAKE_CURRENT_SOURCE_DIR}/app_dram1.ld)

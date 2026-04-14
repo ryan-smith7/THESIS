@@ -12,6 +12,7 @@
 //  */
 
 // #include "sound.h"
+#include "time_sync.h"
 
 // #include <zephyr/kernel.h>
 // #include <zephyr/device.h>
@@ -152,7 +153,7 @@
 //      * sound_ble.c will chunk this into 3 BLE notifications.
 //      */
 //     struct sound_spec_msg spec;
-//     spec.timestamp_ms  = k_uptime_get_32();
+//     spec.utc_sec       = time_sync_get_utc_ms(&spec.utc_ms);  /* stamp at measurement moment */
 //     spec.rms_dbfs_x100 = summary.rms_dbfs_x100;
 
 //     for (uint32_t i = 0; i < SOUND_NUM_BINS; i++) {
@@ -1119,7 +1120,7 @@ static void publish(double avg_dbfs, float peak_freq, float peak_mag)
 
     /* 2. Full spectrum → sound_spec_q */
     struct sound_spec_msg spec;
-    spec.timestamp_ms  = k_uptime_get_32();
+    spec.utc_sec       = time_sync_get_utc_ms(&spec.utc_ms);  /* stamp at measurement moment */
     spec.rms_dbfs_x100 = summary.rms_dbfs_x100;
 
     for (uint32_t i = 0; i < SOUND_NUM_BINS; i++) {

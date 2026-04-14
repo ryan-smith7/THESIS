@@ -137,28 +137,14 @@ west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/Gatewa
 
 west build -b esp32_devkitc/esp32/procpu --sysbuild ~/csse4011/repo/prac2/GatewayServer --pristine
 
+west build -b esp32_devkitc/esp32/procpu ~/csse4011/repo/prac2/SensorNode --pristine
+
 /Users/ryan/zephyr_install/env/bin/python3 \
   /Users/ryan/csse4011/modules/hal/espressif/tools/esptool_py/esptool.py \
   --chip esp32 --port /dev/cu.usbserial-110 --baud 115200 --no-stub write_flash -u \
   --flash_mode dio --flash_freq 40m --flash_size 4MB \
-  0x1000  /Users/ryan/csse4011/repo/prac2/Gateway/build/mcuboot/zephyr/zephyr.bin \
-  0x20000 /Users/ryan/csse4011/repo/prac2/Gateway/build/Gateway/zephyr/zephyr.signed.bin
-
-  /Users/ryan/zephyr_install/env/bin/python3 \
-  /Users/ryan/csse4011/modules/hal/espressif/tools/esptool_py/esptool.py \
-  --chip esp32 --port /dev/cu.usbserial-110 --baud 115200 --no-stub write_flash -u \
-  --flash_mode dio --flash_freq 40m --flash_size 4MB \
-  0x1000  /Users/ryan/csse4011/repo/prac2/GatewayServer/build/mcuboot/zephyr/zephyr.bin \
-  0x20000 /Users/ryan/csse4011/repo/prac2/GatewayServer/build/GatewayServer/zephyr/zephyr.signed.bin
-
-
-
-  /Users/ryan/zephyr_install/env/bin/python3 \
-  /Users/ryan/csse4011/modules/hal/espressif/tools/esptool_py/esptool.py \
-  --chip esp32 --port /dev/cu.usbserial-110 --baud 115200 --no-stub write_flash -u \
-  --flash_mode dio --flash_freq 40m --flash_size 4MB \
-  0x1000  /Users/ryan/csse4011/repo/prac2/task1/build/mcuboot/zephyr/zephyr.bin \
-  0x20000 /Users/ryan/csse4011/repo/prac2/task1/build/task1/zephyr/zephyr.signed.bin
+  0x1000  /Users/ryan/csse4011/repo/prac2/SensorNode/build/mcuboot/zephyr/zephyr.bin \
+  0x20000 /Users/ryan/csse4011/repo/prac2/SensorNode/build/SensorNode/zephyr/zephyr.signed.bin
 
   
 /Users/ryan/zephyr_install/env/bin/python3 \
@@ -198,3 +184,15 @@ az iot hub monitor-events \
   --hub-name iot-hub-esp32-Ryan-Smith \
   --device-id esp32-device-01 \
   --output table
+
+
+
+  /Users/ryan/zephyr_install/env/bin/python3 \
+  /Users/ryan/csse4011/modules/hal/espressif/tools/esptool_py/esptool.py \
+  --chip esp32 --port /dev/cu.usbserial-10 --baud 115200 --no-stub write_flash -u \
+  --flash_mode dio --flash_freq 40m --flash_size 4MB \
+  0x1000  /Users/ryan/csse4011/repo/prac2/file_mvp/build/mcuboot/zephyr/zephyr.bin \
+  0x20000 /Users/ryan/csse4011/repo/prac2/file_mvp/build/file_mvp/zephyr/zephyr.signed.bin
+
+
+  func azure functionapp publish iot-telemetry-func-ryansmith --python

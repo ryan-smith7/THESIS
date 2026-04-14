@@ -23,7 +23,9 @@
  *
  * Total bins sent: 348 × uint16_t = 696 bytes across 3 packets.
  *
- * Gateway reassembly: match packets by timestamp_ms low16, ordered by pkt_id.
+ * SD offline logging: full sound_spec_msg written as raw binary
+ * (700 bytes per record) to /SD/sound.bin when BLE unavailable.
+ * Replayed on reconnect via sound_ble_notify_offline().
  *
  * Service UUID:  A1B2C3D4-E5F6-7890-ABCD-EF1234567890
  * Char UUID:     A1B2C3D4-E5F6-7890-ABCD-EF1234567891
@@ -31,11 +33,12 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/gatt.h>
+#include "sound.h"
 
 /* ── Chunking constants ─────────────────────────────────── */
 #define SOUND_BLE_BINS_PER_PKT   116U   /* bins per notification         */
 #define SOUND_BLE_NUM_PKTS       3U     /* ceil(348 / 116) = 3           */
-#define SOUND_BLE_HDR_SIZE       4U     /* pkt_id + total + timestamp16  */
+#define SOUND_BLE_HDR_SIZE       8U     /* pkt_id(1)+total(1)+utc_sec(4)+utc_ms(2) */
 
 /*
  * Max notification payload:
@@ -54,5 +57,11 @@
  *        Register with K_THREAD_DEFINE in main.c.
  */
 extern void sound_ble_thread(void);
+
+/**
+ * @brief Replay a buffered spectrum from SD drain thread.
+ *        Calls send_spectrum() directly — conn/notify_enabled must be valid.
+ */
+extern void sound_ble_notify_offline(const struct sound_spec_msg *spec);
 
 #endif /* SOUND_BLE_H */

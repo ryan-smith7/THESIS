@@ -1,7 +1,6 @@
 #ifndef WIFI_H_
 #define WIFI_H_
 
-#define WIFI_RETRY_COUNT 10
 #define MAX_SSID_LEN     32
 #define MAX_PSK_LEN      64
 

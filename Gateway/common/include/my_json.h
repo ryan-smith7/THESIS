@@ -1,150 +1,106 @@
-#ifndef BASE_JSON_H
-#define BASE_JSON_H
+/**
+ * @file my_json.h
+ * @brief Per-modality JSON encoders for gateway → Azure IoT Hub.
+ *
+ * Each encoder writes directly into a caller-supplied buffer and returns
+ * the number of bytes written (>0) or a negative error code.
+ *
+ * JSON format per modality:
+ *   {
+ *     "deviceId": "dev-N",
+ *     "utc_sec": NNNN,        ← UTC seconds at measurement on sensor node
+ *     "<modality>": { ... }
+ *   }
+ *
+ * utc_sec is stamped by the sensor node at the moment of measurement via
+ * time_sync_get_utc(). The Azure Function uses this value as the SQL
+ * timestamp rather than datetime.utcnow(), giving accurate measurement
+ * time even after SD card drain replay.
+ *
+ * Value is 0 if the sensor node has not yet received a time sync — the
+ * Azure Function falls back to server time in that case.
+ */
 
-#include <zephyr/kernel.h>
+#ifndef MY_JSON_H
+#define MY_JSON_H
+
 #include <stdint.h>
+#include <stddef.h>
 
-/* ── Buffer sizes ───────────────────────────────────────── */
-#define JSON_BUFFER_SIZE        1600   /* sensor telemetry JSON (increased for soil field) */
-#define SOUND_JSON_BUFFER_SIZE  3072  // was 4096, 2600 actual worst case + margin
+/* ── Buffer sizes ────────────────────────────────────────── */
+#define JSON_ENV_BUF_SIZE    256
+#define JSON_SPEC_BUF_SIZE   512
+#define JSON_MST_BUF_SIZE    128
+#define JSON_BAT_BUF_SIZE    128
+#define JSON_SND_BUF_SIZE   3072
 
-/* ── AS7343 ─────────────────────────────────────────────── */
+/* ── Channel / bin counts ────────────────────────────────── */
 #define AS7343_NUM_CH  13
-
-/* ── AS7343 wavelength table ─────────────────────────────── */
-extern const uint16_t AS7343_WL[AS7343_NUM_CH];
-
-/* ── Sound ──────────────────────────────────────────────── */
-#define SOUND_NUM_BINS  348
+#define SOUND_NUM_BINS 348
 
 /* ═══════════════════════════════════════════════════════════
- * Sensor packet payload  (61-byte UART frame, magic 0xAA)
- *
- * Byte layout:
- *   [0..3]   time              uint32 BE — UTC seconds
- *   [4..5]   time_ms           uint16 BE — UTC milliseconds (0–999)
- *   [6..9]   uptime_ms         uint32 BE
- *   [10]     proto_ver
- *   [11]     dev_id
- *   [12..13] temp_c_x100       int16  BE
- *   [14..15] rh_x100           int16  BE
- *   [16..19] press_hPa_x1000   int32  BE
- *   [20..21] eco2_ppm          uint16 BE
- *   [22..23] tvoc_ppb          uint16 BE
- *   [24]     aqi
- *   [25..50] AS7343 ×13        uint16 BE each (26 bytes)
- *   [51..52] batt_mV           uint16 BE
- *   [53..54] snd_rms_dbfs_x100 int16  BE
- *   [55..56] snd_peak_freq_hz  uint16 BE
- *   [57..58] snd_peak_mag_x10  uint16 BE
- *   [59..60] soil_vwc_x100     uint16 BE — VWC % × 100 (0–10000)
+ * Raw decoded structs — populated by bluetooth.c notify
+ * handlers directly from BLE payload bytes (big-endian).
  * ═══════════════════════════════════════════════════════════ */
-typedef struct {
-    uint32_t time;
-    uint16_t time_ms;          /* UTC sub-second milliseconds (0–999)    */
-    uint32_t uptime_ms;
-    uint8_t  proto_ver;
-    uint8_t  dev_id;
 
+/** BME280 + ENS160 environment */
+typedef struct {
+    uint8_t  dev_id;
+    uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
     int16_t  temp_c_x100;
     int16_t  rh_x100;
     int32_t  press_hPa_x1000;
-
     uint16_t eco2_ppm;
     uint16_t tvoc_ppb;
     uint8_t  aqi;
+} mod_env_t;
 
-    uint16_t as7343[AS7343_NUM_CH];
-    uint16_t batt_mV;
-
-    int16_t  snd_rms_dbfs_x100;
-    uint16_t snd_peak_freq_hz;
-    uint16_t snd_peak_mag_x10;
-
-    uint16_t soil_vwc_x100;    /* VWC % × 100, e.g. 4567 = 45.67%       */
-} tracker_payload_t;
-
-/* ═══════════════════════════════════════════════════════════
- * Sound spectrum payload  (698-byte UART frame, magic 0xBB)
- * ═══════════════════════════════════════════════════════════ */
+/** AS7343 spectrum */
 typedef struct {
     uint8_t  dev_id;
-    uint32_t uptime_ms;
+    uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
+    uint16_t ch[AS7343_NUM_CH];
+} mod_spec_t;
+
+/** Soil moisture */
+typedef struct {
+    uint8_t  dev_id;
+    uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
+    uint16_t vwc_x100;
+} mod_mst_t;
+
+/** Battery */
+typedef struct {
+    uint8_t  dev_id;
+    uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
+    uint16_t mV;
+    uint8_t  pct;
+    int16_t  rate_x10;
+} mod_bat_t;
+
+/** Sound summary */
+typedef struct {
+    uint8_t  dev_id;
+    uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
     int16_t  rms_dbfs_x100;
-    uint16_t bins[SOUND_NUM_BINS];
-} sound_payload_t;
-
-/* ── JSON struct blocks (sensor telemetry) ───────────────── */
-struct json_payload_environment {
-    double   temperature_c;
-    double   humidity_percent;
-    double   pressure_hpa;
-    uint16_t eco2_ppm;
-    uint16_t tvoc_ppb;
-    uint8_t  aqi;
-    uint16_t batt_mV;
-};
-
-struct json_payload_spectrum {
-    uint16_t AS7343_405nm;
-    uint16_t AS7343_425nm;
-    uint16_t AS7343_450nm;
-    uint16_t AS7343_475nm;
-    uint16_t AS7343_515nm;
-    uint16_t AS7343_550nm;
-    uint16_t AS7343_555nm;
-    uint16_t AS7343_600nm;
-    uint16_t AS7343_640nm;
-    uint16_t AS7343_690nm;
-    uint16_t AS7343_745nm;
-    uint16_t AS7343_855nm;
-    uint16_t AS7343_VISIBLE;
-};
-
-struct json_payload_sound_summary {
-    double   rms_dbfs;
     uint16_t peak_freq_hz;
-    double   peak_mag;
-};
+    uint16_t peak_mag_x10;
+    uint16_t bins[SOUND_NUM_BINS];
+} mod_snd_t;
 
-struct json_payload {
-    char     deviceId[20];
-    char     timestamp[72];
-    uint32_t uptime_ms;
-    uint8_t  proto_ver;
-    struct json_payload_environment   environment;
-    struct json_payload_spectrum      spectrum;
-    struct json_payload_sound_summary sound;
-    double   soil_vwc;          /* VWC % as double, e.g. 45.67           */
-};
+/* ═══════════════════════════════════════════════════════════
+ * Encoders
+ * ═══════════════════════════════════════════════════════════ */
 
-struct json_header {
-    char messageId[40];
-    char gatewayId[12];
-    char schemaVersion[8];
-    char messageType[16];
-};
+int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size);
+int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size);
+int json_encode_mst(const mod_mst_t *m, char *buf, size_t buf_size);
+int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size);
+int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size);
 
-struct json_signature {
-    char alg[16];
-    char keyId[24];
-    char value[65];
-};
-
-struct json_full_packet {
-    struct json_header    header;
-    struct json_payload   payload;
-    struct json_signature signature;
-};
-
-extern const char JSON_FORMAT[];
-
-/* ── Public API ─────────────────────────────────────────── */
-void fill_json_packet(const tracker_payload_t *payload,
-                      struct json_full_packet  *packet);
-
-void encode_and_print_json(const struct json_full_packet *packet);
-
-int encode_sound_json(const sound_payload_t *sp, char *buf, size_t buf_size);
-
-#endif /* BASE_JSON_H */
+#endif /* MY_JSON_H */

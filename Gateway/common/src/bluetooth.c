@@ -1,25 +1,19 @@
 /*
- * bluetooth.c — Combined BLE Central Gateway
+ * bluetooth.c — Combined BLE Central Gateway (WROVER WiFi build)
  *
- * Supports two hardware platforms selected at build time:
+ * Subscribes to per-modality BLE characteristics from sensor nodes.
+ * Each notify handler decodes the utc_sec timestamp from bytes [0-3]
+ * then the modality payload from bytes [4+].
  *
- *   CONFIG_ESP_SPIRAM=y   →  ESP32-WROVER  (SPIRAM available)
- *   CONFIG_ESP_SPIRAM=n   →  ESP32-POE     (internal DRAM only)
+ * Payload lengths (all include 4-byte uptime_ms prefix):
+ *   BME: 12  (4 + temp(2) + rh(2) + press(4))
+ *   ENS:  9  (4 + eco2(2) + tvoc(2) + aqi(1))
+ *   AS7: 30  (4 + 13×uint16)
+ *   MST:  6  (4 + vwc(2))
+ *   BAT:  9  (4 + mV(2) + pct(1) + rate(2))
  *
- * Receives two types of BLE GATT notifications from each sensor node:
- *
- *   1. Main sensor characteristic (61 bytes):
- *      BME280 + ENS160 + AS7343 + sound summary + soil VWC
- *
- *   2. Sound spectrum characteristic (3 × ~236 byte chunks):
- *      348-bin FFT spectrum, reassembled from 3 packets (698 bytes total)
- *
- * process_data_thread decodes each packet, encodes JSON, and publishes
- * directly via azure_mqtt_publish(). No UART bridge on either platform.
- *
- * Time sync: on each new node connection the gateway immediately writes
- * the current UTC to the node's characteristic, then repeats every
- * TIMESYNC_INTERVAL_S seconds via process_data_thread().
+ * Bytes [0-3] now carry utc_sec (UTC seconds at measurement)
+ * rather than uptime_ms. The sensor node stamps this via time_sync_get_utc().
  */
 
 #include <zephyr/kernel.h>
@@ -38,124 +32,131 @@
 #include "my_json.h"
 #include "time_sync_writer.h"
 
-/* Set to 1 to log decoded values to serial instead of publishing */
 #define DEBUG_PRINT_RAW 0
+#define INVALID        -1
+#define MSGQ_MAX_MSGS   4
 
-#define INVALID       -1
-#define MSGQ_MAX_MSGS  8
+/* ── Payload lengths ─────────────────────────────────────── */
+#define BME_PAYLOAD_LEN  14  /* +2 for utc_ms */
+#define ENS_PAYLOAD_LEN  11  /* +2 for utc_ms */
+#define AS7_PAYLOAD_LEN  32  /* +2 for utc_ms */
+#define MST_PAYLOAD_LEN   8  /* +2 for utc_ms */
+#define BAT_PAYLOAD_LEN  12  /* +2 for utc_ms */
 
-#define DUMMY 600
-
-/* ── Packet lengths ─────────────────────────────────────── */
-#define SENSOR_PACKED_LEN   61
-#define SOUND_NUM_BINS      348
-#define SOUND_BINS_PER_PKT  116
-#define SOUND_NUM_PKTS      3
-#define SOUND_HDR_SIZE      4     /* pkt_id(1) + total(1) + timestamp16(2) */
-
-/* Assembled sound payload reused as intermediate binary buffer */
-#define SOUND_BIN_BUF_LEN   (2 + SOUND_NUM_BINS * 2)   /* rms(2) + bins(696) */
+#define SOUND_NUM_BINS     348
+#define SOUND_BINS_PER_PKT 116
+#define SOUND_NUM_PKTS     3
+#define SOUND_HDR_SIZE     8   /* pkt_id(1)+total(1)+utc_sec(4)+utc_ms(2) */
 
 LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_INF);
 
-/* ── UUIDs ──────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ * UUIDs
+ * ═══════════════════════════════════════════════════════════ */
 
 static struct bt_uuid_128 tracker_service_uuid = BT_UUID_INIT_128(
-    0x12, 0x34, 0x56, 0x78,
-    0x12, 0x34, 0x56, 0x78,
-    0x12, 0x34, 0x56, 0x78,
-    0x9a, 0xbc, 0xde, 0xf0);
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
+    0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0);
 
 static struct bt_uuid_128 tracker_char_uuid = BT_UUID_INIT_128(
-    0x99, 0x88, 0x77, 0x66,
-    0x55, 0x44, 0x33, 0x22,
-    0x11, 0x00, 0xff, 0xee,
-    0xdd, 0xcc, 0xbb, 0xaa);
-
-static struct bt_uuid_128 sound_service_uuid = BT_UUID_INIT_128(
-    0x90, 0x78, 0x56, 0x34, 0x12, 0xEF,
-    0xCD, 0xAB, 0x90, 0x78, 0xF6, 0xE5,
-    0xD4, 0xC3, 0xB2, 0xA1);
+    0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+    0x11, 0x00, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa);
 
 static struct bt_uuid_128 sound_char_uuid = BT_UUID_INIT_128(
     0x91, 0x78, 0x56, 0x34, 0x12, 0xEF,
     0xCD, 0xAB, 0x90, 0x78, 0xF6, 0xE5,
     0xD4, 0xC3, 0xB2, 0xA1);
 
+/* Modality UUIDs — char handles only, match sensor node definitions */
+static struct bt_uuid_128 bme_char_uuid = BT_UUID_INIT_128(
+    0xB0, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xB0);
+
+static struct bt_uuid_128 ens_char_uuid = BT_UUID_INIT_128(
+    0xE1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xE1);
+
+static struct bt_uuid_128 as7_char_uuid = BT_UUID_INIT_128(
+    0xA7, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xA7);
+
+static struct bt_uuid_128 mst_char_uuid = BT_UUID_INIT_128(
+    0xC1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xC1);
+
+static struct bt_uuid_128 bat_char_uuid = BT_UUID_INIT_128(
+    0xBA, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xBA);
+
 static struct bt_uuid_16 cccd_uuid = BT_UUID_INIT_16(0x2902);
 
-/* ── Per-connection state ───────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ * Per-connection state
+ * ═══════════════════════════════════════════════════════════ */
 static struct bt_conn *conns[MAX_CONN];
 
-static struct bt_gatt_subscribe_params  sensor_subs[MAX_CONN];
-static uint16_t                         sensor_char_handles[MAX_CONN];
-static uint16_t                         sensor_ccc_handles[MAX_CONN];
-static struct bt_gatt_discover_params   sensor_disc[MAX_CONN];
-static struct bt_gatt_discover_params   sensor_cccd_disc[MAX_CONN];
+#define DECL_MOD(name) \
+    static struct bt_gatt_subscribe_params name##_subs[MAX_CONN]; \
+    static uint16_t                        name##_char_handles[MAX_CONN]; \
+    static uint16_t                        name##_ccc_handles[MAX_CONN]; \
+    static struct bt_gatt_discover_params  name##_disc[MAX_CONN]; \
+    static struct bt_gatt_discover_params  name##_cccd_disc[MAX_CONN]
 
-static struct bt_gatt_subscribe_params  sound_subs[MAX_CONN];
-static uint16_t                         sound_char_handles[MAX_CONN];
-static uint16_t                         sound_ccc_handles[MAX_CONN];
-static struct bt_gatt_discover_params   sound_disc[MAX_CONN];
-static struct bt_gatt_discover_params   sound_cccd_disc[MAX_CONN];
+DECL_MOD(sensor);
+DECL_MOD(sound);
+DECL_MOD(bme);
+DECL_MOD(ens);
+DECL_MOD(as7);
+DECL_MOD(mst);
+DECL_MOD(bat);
 
-/* ── Sound spectrum reassembly ──────────────────────────── */
+/* Environment accumulator — merge BME + ENS before enqueuing */
+static mod_env_t env_acc[MAX_CONN];
+static bool      env_bme_ready[MAX_CONN];
+static bool      env_ens_ready[MAX_CONN];
+
+/* Sound reassembly */
 struct sound_reassembly {
     uint16_t bins[SOUND_NUM_BINS];
     int16_t  rms_dbfs_x100;
     uint8_t  received;
-    uint16_t timestamp16;
+    uint32_t utc_sec;      /* reassembly key — UTC seconds from sensor node */
+    uint16_t utc_ms;       /* UTC milliseconds 0-999 */
 };
-
 static struct sound_reassembly sound_rx[MAX_CONN];
 
 /* ── Message queues ─────────────────────────────────────── */
-struct sensor_packet_t { uint8_t data[SENSOR_PACKED_LEN]; };
+K_MSGQ_DEFINE(env_msgq, sizeof(mod_env_t),  MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(as7_msgq, sizeof(mod_spec_t), MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(mst_msgq, sizeof(mod_mst_t),  MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(bat_msgq, sizeof(mod_bat_t),  MSGQ_MAX_MSGS, 4);
 
-/*
- * Sound queue carries the decoded sound_payload_t directly —
- * no intermediate binary packing needed since we no longer go via UART.
- */
-struct sound_queue_pkt_t {
-    sound_payload_t sp;
-};
-
-K_MSGQ_DEFINE(sensor_msgq, sizeof(struct sensor_packet_t),  MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(sound_msgq,  sizeof(struct sound_queue_pkt_t), 2, 4);  /* 2 deep — each slot is 703 bytes */
+struct sound_queue_pkt_t { mod_snd_t sp; };
+K_MSGQ_DEFINE(sound_msgq, sizeof(struct sound_queue_pkt_t), 2, 4);
 
 /* ── Forward declarations ───────────────────────────────── */
-static int   get_conn_index(struct bt_conn *conn);
-static bool  is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid);
-
-static uint8_t sensor_notify_func(struct bt_conn *conn,
-                                   struct bt_gatt_subscribe_params *params,
-                                   const void *data, uint16_t length);
-static void    discover_sensor_char(struct bt_conn *conn, int index);
-static uint8_t sensor_disc_func(struct bt_conn *conn,
-                                 const struct bt_gatt_attr *attr,
-                                 struct bt_gatt_discover_params *params);
-static uint8_t sensor_cccd_disc_func(struct bt_conn *conn,
-                                      const struct bt_gatt_attr *attr,
-                                      struct bt_gatt_discover_params *params);
-
-static uint8_t sound_notify_func(struct bt_conn *conn,
-                                  struct bt_gatt_subscribe_params *params,
-                                  const void *data, uint16_t length);
-static void    discover_sound_char(struct bt_conn *conn, int index);
-static uint8_t sound_disc_func(struct bt_conn *conn,
-                                const struct bt_gatt_attr *attr,
-                                struct bt_gatt_discover_params *params);
-static uint8_t sound_cccd_disc_func(struct bt_conn *conn,
-                                     const struct bt_gatt_attr *attr,
-                                     struct bt_gatt_discover_params *params);
-
+static int  get_conn_index(struct bt_conn *conn);
+static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid);
 static void start_scan(void);
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                           struct net_buf_simple *ad);
-static void connected(struct bt_conn *conn, uint8_t err);
-static void disconnected(struct bt_conn *conn, uint8_t reason);
+static void discover_sensor_char(struct bt_conn *conn, int index);
+static void discover_sound_char(struct bt_conn *conn, int index);
+static void discover_bme_char(struct bt_conn *conn, int index);
+static void discover_ens_char(struct bt_conn *conn, int index);
+static void discover_as7_char(struct bt_conn *conn, int index);
+static void discover_mst_char(struct bt_conn *conn, int index);
+static void discover_bat_char(struct bt_conn *conn, int index);
+static void discover_done(struct bt_conn *conn, int index);
 
-/* ── Helpers ────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ * Helpers
+ * ═══════════════════════════════════════════════════════════ */
 
 static int get_conn_index(struct bt_conn *conn)
 {
@@ -187,117 +188,313 @@ static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid)
     return false;
 }
 
-/* ════════════════════════════════════════════════════════
- * SENSOR PACKET DECODE  (61 bytes → tracker_payload_t)
- * ════════════════════════════════════════════════════════ */
-static void decode_sensor(const uint8_t *d, tracker_payload_t *p)
+/* ── Big-endian decode helpers ──────────────────────────── */
+static inline uint32_t be32(const uint8_t *b)
 {
-    size_t i = 0;
-
-    p->time      = ((uint32_t)d[i]<<24)|((uint32_t)d[i+1]<<16)|
-                   ((uint32_t)d[i+2]<<8)|d[i+3];       i += 4;
-    p->time_ms   = ((uint16_t)d[i]<<8)|d[i+1];         i += 2;
-    p->uptime_ms = ((uint32_t)d[i]<<24)|((uint32_t)d[i+1]<<16)|
-                   ((uint32_t)d[i+2]<<8)|d[i+3];       i += 4;
-
-    p->proto_ver = d[i++];
-    p->dev_id    = d[i++];
-
-    p->temp_c_x100      = (int16_t)((d[i]<<8)|d[i+1]);  i += 2;
-    p->rh_x100          = (int16_t)((d[i]<<8)|d[i+1]);  i += 2;
-    p->press_hPa_x1000  = (int32_t)(((uint32_t)d[i]<<24)|((uint32_t)d[i+1]<<16)|
-                                     ((uint32_t)d[i+2]<<8)|d[i+3]); i += 4;
-
-    p->eco2_ppm  = (uint16_t)((d[i]<<8)|d[i+1]); i += 2;
-    p->tvoc_ppb  = (uint16_t)((d[i]<<8)|d[i+1]); i += 2;
-    p->aqi       = d[i++];
-
-    for (int k = 0; k < AS7343_NUM_CH; k++) {
-        p->as7343[k] = (uint16_t)((d[i]<<8)|d[i+1]); i += 2;
-    }
-
-    p->batt_mV            = (uint16_t)((d[i]<<8)|d[i+1]); i += 2;
-    p->snd_rms_dbfs_x100  = (int16_t) ((d[i]<<8)|d[i+1]); i += 2;
-    p->snd_peak_freq_hz   = (uint16_t)((d[i]<<8)|d[i+1]); i += 2;
-    p->snd_peak_mag_x10   = (uint16_t)((d[i]<<8)|d[i+1]); i += 2;
-    p->soil_vwc_x100      = (uint16_t)((d[i]<<8)|d[i+1]);
+    return ((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|
+           ((uint32_t)b[2]<<8)| (uint32_t)b[3];
+}
+static inline uint16_t be16(const uint8_t *b)
+{
+    return ((uint16_t)b[0] << 8) | b[1];
+}
+static inline int16_t be16s(const uint8_t *b)
+{
+    return (int16_t)(((uint16_t)b[0] << 8) | b[1]);
+}
+static inline int32_t be32s(const uint8_t *b)
+{
+    return (int32_t)(((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|
+                     ((uint32_t)b[2]<<8)| (uint32_t)b[3]);
 }
 
-/* ════════════════════════════════════════════════════════
- * MAIN SENSOR CHARACTERISTIC
- * ════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+ * NOTIFY HANDLERS
+ *
+ * All payloads begin with 4 bytes of utc_sec (big-endian uint32)
+ * stamped on the sensor node at measurement via time_sync_get_utc().
+ * Value is 0 if the sensor node has not yet received a time sync.
+ * ═══════════════════════════════════════════════════════════ */
 
-static uint8_t sensor_notify_func(struct bt_conn *conn,
-                                   struct bt_gatt_subscribe_params *params,
-                                   const void *data, uint16_t length)
+/* ── BME280 (12 bytes: uptime(4) + temp(2) + rh(2) + press(4)) ──────── */
+static uint8_t bme_notify_func(struct bt_conn *conn,
+                                struct bt_gatt_subscribe_params *params,
+                                const void *data, uint16_t length)
 {
-    if (!data || length != SENSOR_PACKED_LEN) {
-        LOG_WRN("[SENSOR] Unexpected length %u (expected %u)", length, SENSOR_PACKED_LEN);
-        return BT_GATT_ITER_CONTINUE;
+    if (!data || length != BME_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+    int idx = get_conn_index(conn);
+    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    const uint8_t *d = data;
+    env_acc[idx].utc_sec          = be32(d + 0);
+    env_acc[idx].utc_ms           = be16(d + 4);   /* NEW */
+    env_acc[idx].temp_c_x100      = be16s(d + 6);
+    env_acc[idx].rh_x100          = be16s(d + 8);
+    env_acc[idx].press_hPa_x1000  = be32s(d + 10);
+    env_bme_ready[idx] = true;
+
+    if (env_ens_ready[idx]) {
+        env_ens_ready[idx] = false;
+        env_bme_ready[idx] = false;
+        if (k_msgq_put(&env_msgq, &env_acc[idx], K_NO_WAIT) != 0) {
+            LOG_WRN("[BME %d] env queue full", idx);
+        }
     }
-
-    struct sensor_packet_t pkt;
-    memcpy(pkt.data, data, SENSOR_PACKED_LEN);
-
-    if (k_msgq_put(&sensor_msgq, &pkt, K_NO_WAIT) != 0) {
-        LOG_WRN("[SENSOR] Queue full — dropping packet");
-    }
-
     return BT_GATT_ITER_CONTINUE;
 }
 
+/* ── ENS160 (9 bytes: uptime(4) + eco2(2) + tvoc(2) + aqi(1)) ───────── */
+static uint8_t ens_notify_func(struct bt_conn *conn,
+                                struct bt_gatt_subscribe_params *params,
+                                const void *data, uint16_t length)
+{
+    if (!data || length != ENS_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+    int idx = get_conn_index(conn);
+    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    const uint8_t *d = data;
+    /* Use ENS utc_sec only if BME hasn't arrived yet */
+    if (!env_bme_ready[idx]) {
+        env_acc[idx].utc_sec = be32(d + 0);
+    }
+    env_acc[idx].eco2_ppm = be16(d + 4);
+    env_acc[idx].tvoc_ppb = be16(d + 6);
+    env_acc[idx].aqi      = d[8];
+    env_ens_ready[idx] = true;
+
+    if (env_bme_ready[idx]) {
+        env_bme_ready[idx] = false;
+        env_ens_ready[idx] = false;
+        if (k_msgq_put(&env_msgq, &env_acc[idx], K_NO_WAIT) != 0) {
+            LOG_WRN("[ENS %d] env queue full", idx);
+        }
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+/* ── AS7343 (30 bytes: uptime(4) + 13×uint16(26)) ────────────────────── */
+static uint8_t as7_notify_func(struct bt_conn *conn,
+                                struct bt_gatt_subscribe_params *params,
+                                const void *data, uint16_t length)
+{
+    if (!data || length != AS7_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+    int idx = get_conn_index(conn);
+    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    const uint8_t *d = data;
+    mod_spec_t msg;
+    msg.dev_id  = (uint8_t)idx;
+    msg.utc_sec = be32(d + 0);
+    msg.utc_ms  = be16(d + 4);   /* NEW */
+    for (int i = 0; i < AS7343_NUM_CH; i++) {
+        msg.ch[i] = be16(d + 6 + i * 2);
+    }
+
+    if (k_msgq_put(&as7_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[AS7 %d] queue full", idx);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+/* ── Moisture (6 bytes: uptime(4) + vwc(2)) ──────────────────────────── */
+static uint8_t mst_notify_func(struct bt_conn *conn,
+                                struct bt_gatt_subscribe_params *params,
+                                const void *data, uint16_t length)
+{
+    if (!data || length != MST_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+    int idx = get_conn_index(conn);
+    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    const uint8_t *d = data;
+    mod_mst_t msg;
+    msg.dev_id   = (uint8_t)idx;
+    msg.utc_sec  = be32(d + 0);
+    msg.utc_ms   = be16(d + 4);   /* NEW */
+    msg.vwc_x100 = be16(d + 6);
+
+    if (k_msgq_put(&mst_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[MST %d] queue full", idx);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+/* ── Battery (9 bytes: uptime(4) + mV(2) + pct(1) + rate(2)) ────────── */
+static uint8_t bat_notify_func(struct bt_conn *conn,
+                                struct bt_gatt_subscribe_params *params,
+                                const void *data, uint16_t length)
+{
+    if (!data || length != BAT_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+    int idx = get_conn_index(conn);
+    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+ 
+    const uint8_t *d = data;
+    mod_bat_t msg;
+    msg.utc_sec  = be32(d + 0);
+    msg.utc_ms   = be16(d + 4);
+    msg.mV       = be16(d + 6);
+    msg.pct      = d[8];
+    msg.rate_x10 = be16s(d + 9);
+    msg.dev_id   = d[11];          /* dev_id from sensor node — identifies which node */
+ 
+    if (k_msgq_put(&bat_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[BAT %d] queue full", idx);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+/* ── Sound spectrum (existing reassembly — unchanged) ────────────────── */
+static uint8_t sound_notify_func(struct bt_conn *conn,
+                                  struct bt_gatt_subscribe_params *params,
+                                  const void *data, uint16_t length)
+{
+    if (!data || length < SOUND_HDR_SIZE) return BT_GATT_ITER_CONTINUE;
+    int index = get_conn_index(conn);
+    if (index < 0) return BT_GATT_ITER_CONTINUE;
+
+    const uint8_t *buf = (const uint8_t *)data;
+    uint8_t  pkt_id  = buf[0];
+    uint8_t  total   = buf[1];
+    uint32_t utc_sec = be32(buf + 2);  /* 4 bytes */
+    uint16_t utc_ms  = be16(buf + 6);  /* 2 bytes — NEW */
+
+    if (pkt_id >= SOUND_NUM_PKTS || total != SOUND_NUM_PKTS) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+
+    struct sound_reassembly *rx = &sound_rx[index];
+    if (pkt_id == 0 || utc_sec != rx->utc_sec || utc_ms != rx->utc_ms) {
+        memset(rx, 0, sizeof(*rx));
+        rx->utc_sec = utc_sec;
+        rx->utc_ms  = utc_ms;
+    }
+    if (rx->received & (1u << pkt_id)) return BT_GATT_ITER_CONTINUE;
+
+    uint32_t bin_start     = pkt_id * SOUND_BINS_PER_PKT;
+    const uint8_t *payload = buf + SOUND_HDR_SIZE;
+    uint16_t payload_len   = length - SOUND_HDR_SIZE;
+    uint16_t bin_bytes     = (pkt_id == SOUND_NUM_PKTS - 1)
+                             ? payload_len - 2 : payload_len;
+    uint32_t bin_count     = bin_bytes / 2;
+
+    for (uint32_t i = 0; i < bin_count && (bin_start + i) < SOUND_NUM_BINS; i++) {
+        rx->bins[bin_start + i] = be16(payload + i * 2);
+    }
+    if (pkt_id == SOUND_NUM_PKTS - 1 && payload_len >= 2) {
+        rx->rms_dbfs_x100 = be16s(payload + payload_len - 2);
+    }
+
+    rx->received |= (1u << pkt_id);
+
+    if (rx->received == 0x07) {
+        struct sound_queue_pkt_t qpkt;
+        memset(&qpkt, 0, sizeof(qpkt));
+        qpkt.sp.dev_id        = (uint8_t)index;
+        qpkt.sp.utc_sec       = rx->utc_sec;   /* UTC from sensor node */
+        qpkt.sp.utc_ms        = rx->utc_ms;    /* UTC ms — NEW */
+        qpkt.sp.rms_dbfs_x100 = rx->rms_dbfs_x100;
+        memcpy(qpkt.sp.bins, rx->bins, sizeof(rx->bins));
+        if (k_msgq_put(&sound_msgq, &qpkt, K_NO_WAIT) != 0) {
+            LOG_WRN("[SOUND %d] queue full", index);
+        }
+        rx->received = 0;
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ * DISCOVERY CHAIN
+ * sensor → sound → bme → ens → as7 → mst → bat → done
+ * ═══════════════════════════════════════════════════════════ */
+
+#define MODALITY_DISC_FUNCS(name, next_fn, notify_fn)                        \
+static uint8_t name##_cccd_disc_func(struct bt_conn *conn,                   \
+                                      const struct bt_gatt_attr *attr,        \
+                                      struct bt_gatt_discover_params *params) \
+{                                                                             \
+    int index = get_conn_index(conn);                                         \
+    if (!attr) {                                                              \
+        LOG_ERR("[" #name " %d] CCCD not found", index);                     \
+        next_fn(conn, index);                                                 \
+        return BT_GATT_ITER_STOP;                                             \
+    }                                                                         \
+    name##_ccc_handles[index]       = attr->handle;                          \
+    name##_subs[index].ccc_handle   = name##_ccc_handles[index];             \
+    name##_subs[index].value_handle = name##_char_handles[index];            \
+    name##_subs[index].notify       = notify_fn;                             \
+    name##_subs[index].value        = BT_GATT_CCC_NOTIFY;                   \
+    int err = bt_gatt_subscribe(conn, &name##_subs[index]);                  \
+    if (err) LOG_ERR("[" #name " %d] subscribe failed (%d)", index, err);    \
+    else     LOG_INF("[" #name " %d] subscribed", index);                    \
+    next_fn(conn, index);                                                     \
+    return BT_GATT_ITER_STOP;                                                 \
+}                                                                             \
+static uint8_t name##_disc_func(struct bt_conn *conn,                        \
+                                 const struct bt_gatt_attr *attr,             \
+                                 struct bt_gatt_discover_params *params)      \
+{                                                                             \
+    int index = get_conn_index(conn);                                         \
+    if (!attr) {                                                              \
+        LOG_ERR("[" #name " %d] char not found", index);                     \
+        next_fn(conn, index);                                                 \
+        return BT_GATT_ITER_STOP;                                             \
+    }                                                                         \
+    const struct bt_gatt_chrc *chrc = attr->user_data;                      \
+    name##_char_handles[index] = chrc->value_handle;                         \
+    name##_cccd_disc[index].uuid         = &cccd_uuid.uuid;                  \
+    name##_cccd_disc[index].start_handle = name##_char_handles[index];       \
+    name##_cccd_disc[index].end_handle   = 0xffff;                           \
+    name##_cccd_disc[index].type         = BT_GATT_DISCOVER_ATTRIBUTE;       \
+    name##_cccd_disc[index].func         = name##_cccd_disc_func;            \
+    int err = bt_gatt_discover(conn, &name##_cccd_disc[index]);              \
+    if (err) LOG_ERR("[" #name " %d] cccd discover failed (%d)", index, err);\
+    return BT_GATT_ITER_STOP;                                                 \
+}                                                                             \
+static void discover_##name##_char(struct bt_conn *conn, int index)          \
+{                                                                             \
+    name##_disc[index].uuid         = &name##_char_uuid.uuid;                \
+    name##_disc[index].func         = name##_disc_func;                      \
+    name##_disc[index].start_handle = 0x0001;                                \
+    name##_disc[index].end_handle   = 0xffff;                                \
+    name##_disc[index].type         = BT_GATT_DISCOVER_CHARACTERISTIC;       \
+    int err = bt_gatt_discover(conn, &name##_disc[index]);                   \
+    if (err) LOG_ERR("[" #name " %d] discover failed (%d)", index, err);     \
+}
+
+/* ── Sensor (chains to sound, no notify — time sync write target only) ── */
 static uint8_t sensor_cccd_disc_func(struct bt_conn *conn,
                                       const struct bt_gatt_attr *attr,
                                       struct bt_gatt_discover_params *params)
 {
     int index = get_conn_index(conn);
     if (!attr) {
-        LOG_ERR("[BASE %d] Sensor CCCD not found", index);
+        LOG_ERR("[SENSOR %d] CCCD not found", index);
         return BT_GATT_ITER_STOP;
     }
-
     sensor_ccc_handles[index]       = attr->handle;
     sensor_subs[index].ccc_handle   = sensor_ccc_handles[index];
     sensor_subs[index].value_handle = sensor_char_handles[index];
-    sensor_subs[index].notify       = sensor_notify_func;
+    sensor_subs[index].notify       = NULL;
     sensor_subs[index].value        = BT_GATT_CCC_NOTIFY;
 
-    int err = bt_gatt_subscribe(conn, &sensor_subs[index]);
-    if (err) LOG_ERR("[BASE %d] Sensor subscribe failed (%d)", index, err);
-    else     LOG_INF("[BASE %d] Subscribed to sensor characteristic", index);
-
-    /* Send first time sync immediately */
     time_sync_writer_send(conn, index, sensor_char_handles[index]);
-
-    /* Chain into sound characteristic discovery */
     discover_sound_char(conn, index);
-
     return BT_GATT_ITER_STOP;
 }
 
 static uint8_t sensor_disc_func(struct bt_conn *conn,
-                                  const struct bt_gatt_attr *attr,
-                                  struct bt_gatt_discover_params *params)
+                                 const struct bt_gatt_attr *attr,
+                                 struct bt_gatt_discover_params *params)
 {
     int index = get_conn_index(conn);
-    if (!attr) {
-        LOG_ERR("[BASE %d] Sensor characteristic not found", index);
-        return BT_GATT_ITER_STOP;
-    }
-
+    if (!attr) { return BT_GATT_ITER_STOP; }
     const struct bt_gatt_chrc *chrc = attr->user_data;
     sensor_char_handles[index] = chrc->value_handle;
-    LOG_INF("[BASE %d] Sensor char handle: 0x%04x", index, sensor_char_handles[index]);
-
     sensor_cccd_disc[index].uuid         = &cccd_uuid.uuid;
     sensor_cccd_disc[index].start_handle = sensor_char_handles[index];
     sensor_cccd_disc[index].end_handle   = 0xffff;
     sensor_cccd_disc[index].type         = BT_GATT_DISCOVER_ATTRIBUTE;
     sensor_cccd_disc[index].func         = sensor_cccd_disc_func;
-
-    int err = bt_gatt_discover(conn, &sensor_cccd_disc[index]);
-    if (err) LOG_ERR("[BASE %d] Sensor CCCD discover failed (%d)", index, err);
-
+    bt_gatt_discover(conn, &sensor_cccd_disc[index]);
     return BT_GATT_ITER_STOP;
 }
 
@@ -308,156 +505,26 @@ static void discover_sensor_char(struct bt_conn *conn, int index)
     sensor_disc[index].start_handle = 0x0001;
     sensor_disc[index].end_handle   = 0xffff;
     sensor_disc[index].type         = BT_GATT_DISCOVER_CHARACTERISTIC;
-
     int err = bt_gatt_discover(conn, &sensor_disc[index]);
-    if (err) LOG_ERR("[BASE %d] Sensor discover failed (%d)", index, err);
+    if (err) LOG_ERR("[SENSOR %d] discover failed (%d)", index, err);
 }
 
-/* ════════════════════════════════════════════════════════
- * SOUND SPECTRUM CHARACTERISTIC
- * ════════════════════════════════════════════════════════ */
-
-static uint8_t sound_notify_func(struct bt_conn *conn,
-                                  struct bt_gatt_subscribe_params *params,
-                                  const void *data, uint16_t length)
+static void discover_done(struct bt_conn *conn, int index)
 {
-    if (!data || length < SOUND_HDR_SIZE) {
-        return BT_GATT_ITER_CONTINUE;
-    }
-
-    int index = get_conn_index(conn);
-    if (index < 0) return BT_GATT_ITER_CONTINUE;
-
-    const uint8_t *buf = (const uint8_t *)data;
-    uint8_t  pkt_id = buf[0];
-    uint8_t  total  = buf[1];
-    uint16_t ts16   = ((uint16_t)buf[2] << 8) | buf[3];
-
-    if (pkt_id >= SOUND_NUM_PKTS || total != SOUND_NUM_PKTS) {
-        LOG_WRN("[SOUND %d] Bad header pkt=%u total=%u", index, pkt_id, total);
-        return BT_GATT_ITER_CONTINUE;
-    }
-
-    struct sound_reassembly *rx = &sound_rx[index];
-
-    if (pkt_id == 0 || ts16 != rx->timestamp16) {
-        memset(rx, 0, sizeof(*rx));
-        rx->timestamp16 = ts16;
-    }
-
-    if (rx->received & (1u << pkt_id)) {
-        LOG_WRN("[SOUND %d] Duplicate pkt %u — ignored", index, pkt_id);
-        return BT_GATT_ITER_CONTINUE;
-    }
-
-    uint32_t bin_start     = pkt_id * SOUND_BINS_PER_PKT;
-    const uint8_t *payload = buf + SOUND_HDR_SIZE;
-    uint16_t payload_len   = length - SOUND_HDR_SIZE;
-
-    uint16_t bin_bytes = (pkt_id == SOUND_NUM_PKTS - 1)
-                         ? payload_len - 2
-                         : payload_len;
-    uint32_t bin_count = bin_bytes / 2;
-
-    for (uint32_t i = 0; i < bin_count && (bin_start + i) < SOUND_NUM_BINS; i++) {
-        rx->bins[bin_start + i] =
-            ((uint16_t)payload[i * 2] << 8) | payload[i * 2 + 1];
-    }
-
-    if (pkt_id == SOUND_NUM_PKTS - 1 && payload_len >= 2) {
-        rx->rms_dbfs_x100 =
-            (int16_t)(((uint16_t)payload[payload_len - 2] << 8)
-                      | payload[payload_len - 1]);
-    }
-
-    rx->received |= (1u << pkt_id);
-    LOG_DBG("[SOUND %d] Pkt %u received (mask=0x%02x)", index, pkt_id, rx->received);
-
-    /* All 3 packets received — build sound_payload_t and enqueue */
-    if (rx->received == 0x07) {
-        struct sound_queue_pkt_t qpkt;
-        memset(&qpkt, 0, sizeof(qpkt));
-
-        qpkt.sp.rms_dbfs_x100 = rx->rms_dbfs_x100;
-        qpkt.sp.uptime_ms     = 0;   /* filled by process_data_thread */
-        qpkt.sp.dev_id        = 0;   /* gateway has no per-conn dev_id */
-        memcpy(qpkt.sp.bins, rx->bins, sizeof(rx->bins));
-
-        if (k_msgq_put(&sound_msgq, &qpkt, K_NO_WAIT) != 0) {
-            LOG_WRN("[SOUND %d] Queue full — dropping spectrum", index);
-        } else {
-            LOG_INF("[SOUND %d] Spectrum complete (ts=%u rms=%d)",
-                    index, ts16, rx->rms_dbfs_x100);
-        }
-
-        rx->received = 0;
-    }
-
-    return BT_GATT_ITER_CONTINUE;
+    LOG_INF("[BASE %d] Discovery chain complete", index);
 }
 
-static uint8_t sound_cccd_disc_func(struct bt_conn *conn,
-                                     const struct bt_gatt_attr *attr,
-                                     struct bt_gatt_discover_params *params)
-{
-    int index = get_conn_index(conn);
-    if (!attr) {
-        LOG_ERR("[BASE %d] Sound CCCD not found", index);
-        return BT_GATT_ITER_STOP;
-    }
+/* Expand modality discovery triplets — chain order: sound→bme→ens→as7→mst→bat→done */
+MODALITY_DISC_FUNCS(sound, discover_bme_char,  sound_notify_func)
+MODALITY_DISC_FUNCS(bme,   discover_ens_char,  bme_notify_func)
+MODALITY_DISC_FUNCS(ens,   discover_as7_char,  ens_notify_func)
+MODALITY_DISC_FUNCS(as7,   discover_mst_char,  as7_notify_func)
+MODALITY_DISC_FUNCS(mst,   discover_bat_char,  mst_notify_func)
+MODALITY_DISC_FUNCS(bat,   discover_done,      bat_notify_func)
 
-    sound_ccc_handles[index]       = attr->handle;
-    sound_subs[index].ccc_handle   = sound_ccc_handles[index];
-    sound_subs[index].value_handle = sound_char_handles[index];
-    sound_subs[index].notify       = sound_notify_func;
-    sound_subs[index].value        = BT_GATT_CCC_NOTIFY;
-
-    int err = bt_gatt_subscribe(conn, &sound_subs[index]);
-    if (err) LOG_ERR("[BASE %d] Sound subscribe failed (%d)", index, err);
-    else     LOG_INF("[BASE %d] Subscribed to sound spectrum characteristic", index);
-
-    return BT_GATT_ITER_STOP;
-}
-
-static uint8_t sound_disc_func(struct bt_conn *conn,
-                                const struct bt_gatt_attr *attr,
-                                struct bt_gatt_discover_params *params)
-{
-    int index = get_conn_index(conn);
-    if (!attr) {
-        LOG_ERR("[BASE %d] Sound characteristic not found", index);
-        return BT_GATT_ITER_STOP;
-    }
-
-    const struct bt_gatt_chrc *chrc = attr->user_data;
-    sound_char_handles[index] = chrc->value_handle;
-    LOG_INF("[BASE %d] Sound char handle: 0x%04x", index, sound_char_handles[index]);
-
-    sound_cccd_disc[index].uuid         = &cccd_uuid.uuid;
-    sound_cccd_disc[index].start_handle = sound_char_handles[index];
-    sound_cccd_disc[index].end_handle   = 0xffff;
-    sound_cccd_disc[index].type         = BT_GATT_DISCOVER_ATTRIBUTE;
-    sound_cccd_disc[index].func         = sound_cccd_disc_func;
-
-    int err = bt_gatt_discover(conn, &sound_cccd_disc[index]);
-    if (err) LOG_ERR("[BASE %d] Sound CCCD discover failed (%d)", index, err);
-
-    return BT_GATT_ITER_STOP;
-}
-
-static void discover_sound_char(struct bt_conn *conn, int index)
-{
-    sound_disc[index].uuid         = &sound_char_uuid.uuid;
-    sound_disc[index].func         = sound_disc_func;
-    sound_disc[index].start_handle = 0x0001;
-    sound_disc[index].end_handle   = 0xffff;
-    sound_disc[index].type         = BT_GATT_DISCOVER_CHARACTERISTIC;
-
-    int err = bt_gatt_discover(conn, &sound_disc[index]);
-    if (err) LOG_ERR("[BASE %d] Sound discover failed (%d)", index, err);
-}
-
-/* ── Scan and connection ────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ * Scan and connection management
+ * ═══════════════════════════════════════════════════════════ */
 
 static void start_scan(void)
 {
@@ -475,6 +542,10 @@ static void start_scan(void)
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                           struct net_buf_simple *ad)
 {
+    if (!azure_mqtt_is_connected()) {
+        return;  /* ignore advertisements until MQTT is back */
+    }
+    
     if (type != BT_GAP_ADV_TYPE_ADV_IND &&
         type != BT_GAP_ADV_TYPE_ADV_DIRECT_IND) return;
     if (!is_uuid_in_ad(ad, &tracker_service_uuid.uuid)) return;
@@ -495,10 +566,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     bt_le_scan_stop();
     int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
                                 BT_LE_CONN_PARAM_DEFAULT, &conns[slot]);
-    if (err) {
-        LOG_ERR("[BASE] Connect failed (%d)", err);
-        start_scan();
-    }
+    if (err) { LOG_ERR("[BASE] Connect failed (%d)", err); start_scan(); }
 }
 
 static struct bt_gatt_exchange_params mtu_params[MAX_CONN];
@@ -507,7 +575,7 @@ static void exchange_func(struct bt_conn *conn, uint8_t err,
                            struct bt_gatt_exchange_params *params)
 {
     if (err) LOG_ERR("MTU exchange failed (%u)", err);
-    else     LOG_INF("MTU negotiated: %d bytes", bt_gatt_get_mtu(conn));
+    else     LOG_INF("MTU: %d bytes", bt_gatt_get_mtu(conn));
 }
 
 static void connected(struct bt_conn *conn, uint8_t err)
@@ -516,8 +584,16 @@ static void connected(struct bt_conn *conn, uint8_t err)
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
     if (err) {
-        LOG_ERR("[BASE] Connect to %s failed (err %u)", addr, err);
+        LOG_ERR("[BASE] Connect failed (err %u)", err);
         bt_conn_unref(conn);
+        start_scan();
+        return;
+    }
+
+    /* Don't establish BLE connections if MQTT is not up */
+    if (!azure_mqtt_is_connected()) {
+        LOG_WRN("[BASE] MQTT not connected — rejecting BLE connection");
+        bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         start_scan();
         return;
     }
@@ -532,12 +608,15 @@ static void connected(struct bt_conn *conn, uint8_t err)
     LOG_INF("[BASE] Connected [%d]: %s", index, addr);
 
     memset(&sound_rx[index], 0, sizeof(sound_rx[index]));
+    memset(&env_acc[index],  0, sizeof(env_acc[index]));
+    env_bme_ready[index] = false;
+    env_ens_ready[index] = false;
+    env_acc[index].dev_id = (uint8_t)index;
 
     mtu_params[index].func = exchange_func;
     bt_gatt_exchange_mtu(conn, &mtu_params[index]);
 
     discover_sensor_char(conn, index);
-
     start_scan();
 }
 
@@ -550,8 +629,16 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         conns[index]               = NULL;
         sensor_char_handles[index] = 0;
         sound_char_handles[index]  = 0;
+        bme_char_handles[index]    = 0;
+        ens_char_handles[index]    = 0;
+        as7_char_handles[index]    = 0;
+        mst_char_handles[index]    = 0;
+        bat_char_handles[index]    = 0;
+        env_bme_ready[index]       = false;
+        env_ens_ready[index]       = false;
         memset(&sound_rx[index], 0, sizeof(sound_rx[index]));
     }
+    start_scan();
 }
 
 static struct bt_conn_cb conn_callbacks = {
@@ -559,85 +646,55 @@ static struct bt_conn_cb conn_callbacks = {
     .disconnected = disconnected,
 };
 
-/* ════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════
  * process_data_thread
- *
- * Dequeues both sensor and sound packets, encodes JSON, and publishes
- * directly to Azure IoT Hub via azure_mqtt_publish().
- *
- * All working buffers are static — sound JSON is ~4 KB and must not
- * live on the thread stack.
- *
- * Also periodically writes UTC time to all connected sensor nodes.
- * ════════════════════════════════════════════════════════ */
+ * ═══════════════════════════════════════════════════════════ */
 
-/*
- * Process thread stack:
- *   WROVER (SPIRAM): 6144 — larger because more connections + headroom
- *   POE (no SPIRAM): 4096 — tighter DRAM budget, fewer connections
- *
- * Both are sufficient for sensor JSON (~1.5 KB) and sound JSON (~4 KB)
- * encode because the large output buffers are static, not on-stack.
- */
 #if defined(CONFIG_ESP_SPIRAM)
 #  define PROCESS_STACK_SIZE  6144
-#else
-#  define PROCESS_STACK_SIZE  4096
-#endif
-
-#define PROCESS_PRIO  BASE_PROCESS_PRIORITY
-
-/*
- * Process thread stack placement:
- *   WROVER: place in SPIRAM to save internal DRAM for BT + MQTT.
- *   POE:    internal DRAM only — no SPIRAM available.
- */
-#if defined(CONFIG_ESP_SPIRAM)
 Z_KERNEL_STACK_DEFINE_IN(process_stack, PROCESS_STACK_SIZE,
     __attribute__((section(".ext_ram.bss"))));
 #else
+#  define PROCESS_STACK_SIZE  4096
 K_THREAD_STACK_DEFINE(process_stack, PROCESS_STACK_SIZE);
 #endif
 
-static struct k_thread process_tid;
-
-static uint8_t sound_pkt_count = 0;  /* throttle: publish 1 in 10 sound frames */
-
-/*
- * Large working buffers — static so they don't consume thread stack.
- *
- * WROVER: place in SPIRAM (.ext_ram.bss) to relieve the 96 KB internal
- *         DRAM shared with BT + MQTT stacks.
- * POE:    stay in normal BSS — no SPIRAM available, but fewer connections
- *         (MAX_CONN 2) and smaller stack sizes keep total DRAM in budget.
- */
 #if defined(CONFIG_ESP_SPIRAM)
-static tracker_payload_t      s_sensor_pkt                               __attribute__((section(".ext_ram.bss")));
-static struct json_full_packet s_jp                                      __attribute__((section(".ext_ram.bss")));
-static char                    s_sensor_json[JSON_BUFFER_SIZE]           __attribute__((section(".ext_ram.bss")));
-static sound_payload_t         s_sound_pkt                               __attribute__((section(".ext_ram.bss")));
-static char                    s_sound_json[SOUND_JSON_BUFFER_SIZE]      __attribute__((section(".ext_ram.bss")));
+static char s_env_json[JSON_ENV_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
+static char s_as7_json[JSON_SPEC_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static char s_mst_json[JSON_MST_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
+static char s_bat_json[JSON_BAT_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
+static char s_snd_json[JSON_SND_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 #else
-static tracker_payload_t       s_sensor_pkt;
-static struct json_full_packet s_jp;
-static char                    s_sensor_json[JSON_BUFFER_SIZE];
-static sound_payload_t         s_sound_pkt;
-static char                    s_sound_json[SOUND_JSON_BUFFER_SIZE];
+static char s_env_json[JSON_ENV_BUF_SIZE];
+static char s_as7_json[JSON_SPEC_BUF_SIZE];
+static char s_mst_json[JSON_MST_BUF_SIZE];
+static char s_bat_json[JSON_BAT_BUF_SIZE];
+static char s_snd_json[JSON_SND_BUF_SIZE];
 #endif
+
+static uint8_t sound_throttle = 0;
 
 void process_data_thread(void)
 {
-    /* Zero all buffers before first use */
-    memset(&s_sensor_pkt, 0, sizeof(s_sensor_pkt));
-    memset(&s_jp,         0, sizeof(s_jp));
-    memset(s_sensor_json, 0, sizeof(s_sensor_json));
-    memset(&s_sound_pkt,  0, sizeof(s_sound_pkt));
-    memset(s_sound_json,  0, sizeof(s_sound_json));
-
     uint32_t last_timesync_ms = 0;
 
     while (1) {
-        /* ── Periodic time sync to all nodes ──────────────── */
+
+        /* ── MQTT connectivity guard ──────────────────────────── */
+        if (!azure_mqtt_is_connected()) {
+            for (int i = 0; i < MAX_CONN; i++) {
+                if (conns[i]) {
+                    LOG_WRN("MQTT down — disconnecting BLE node %d", i);
+                    bt_conn_disconnect(conns[i],
+                        BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+                }
+            }
+            k_sleep(K_SECONDS(5));
+            continue;
+        }
+
+        /* ── Periodic time sync ───────────────────────────── */
         uint32_t now = k_uptime_get_32();
         if ((now - last_timesync_ms) >= (TIMESYNC_INTERVAL_S * 1000U)
             && time_sync_writer_has_utc())
@@ -650,103 +707,74 @@ void process_data_thread(void)
             last_timesync_ms = now;
         }
 
-        /* ── Sensor queue → JSON → Azure ──────────────────── */
-        struct sensor_packet_t spkt;
-        if (k_msgq_get(&sensor_msgq, &spkt, K_MSEC(5)) == 0) {
-#if DEBUG_PRINT_RAW
-            printk("[SENSOR RAW] %u bytes:", SENSOR_PACKED_LEN);
-            for (int i = 0; i < SENSOR_PACKED_LEN; i++) printk(" %02x", spkt.data[i]);
-            printk("\n");
-#else
-            memset(&s_sensor_pkt, 0, sizeof(s_sensor_pkt));
-            memset(&s_jp,         0, sizeof(s_jp));
-
-            decode_sensor(spkt.data, &s_sensor_pkt);
-            fill_json_packet(&s_sensor_pkt, &s_jp);
-
-            int ret = snprintk(s_sensor_json, sizeof(s_sensor_json),
-                JSON_FORMAT,
-                s_jp.header.messageId,
-                s_jp.header.gatewayId,
-                s_jp.header.schemaVersion,
-                s_jp.header.messageType,
-                s_jp.payload.deviceId,
-                s_jp.payload.timestamp,
-                s_jp.payload.uptime_ms,
-                s_jp.payload.proto_ver,
-                s_jp.payload.environment.temperature_c,
-                s_jp.payload.environment.humidity_percent,
-                s_jp.payload.environment.pressure_hpa,
-                s_jp.payload.environment.eco2_ppm,
-                s_jp.payload.environment.tvoc_ppb,
-                s_jp.payload.environment.aqi,
-                s_jp.payload.environment.batt_mV,
-                s_jp.payload.spectrum.AS7343_405nm,
-                s_jp.payload.spectrum.AS7343_425nm,
-                s_jp.payload.spectrum.AS7343_450nm,
-                s_jp.payload.spectrum.AS7343_475nm,
-                s_jp.payload.spectrum.AS7343_515nm,
-                s_jp.payload.spectrum.AS7343_550nm,
-                s_jp.payload.spectrum.AS7343_555nm,
-                s_jp.payload.spectrum.AS7343_600nm,
-                s_jp.payload.spectrum.AS7343_640nm,
-                s_jp.payload.spectrum.AS7343_690nm,
-                s_jp.payload.spectrum.AS7343_745nm,
-                s_jp.payload.spectrum.AS7343_855nm,
-                s_jp.payload.spectrum.AS7343_VISIBLE,
-                s_jp.payload.sound.rms_dbfs,
-                s_jp.payload.sound.peak_freq_hz,
-                s_jp.payload.sound.peak_mag,
-                s_jp.payload.soil_vwc
-            );
-
-            if (ret > 0 && ret < (int)sizeof(s_sensor_json)) {
-                int pub = azure_mqtt_publish(s_sensor_json);
-                if (pub < 0) {
-                    LOG_WRN("Sensor publish failed (%d)", pub);
-                } else {
-                    LOG_INF("Sensor published dev-%u (%d bytes)",
-                            s_sensor_pkt.dev_id, ret);
-                }
+        /* ── Environment ──────────────────────────────────── */
+        mod_env_t env_msg;
+        if (k_msgq_get(&env_msgq, &env_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_env(&env_msg, s_env_json, sizeof(s_env_json));
+            if (ret > 0) {
+                LOG_INF("env JSON");
+                // LOG_INF("env JSON: %s", s_env JSON);
+                azure_mqtt_publish(s_env_json);
             } else {
-                LOG_ERR("Sensor JSON encode failed (ret=%d)", ret);
+                LOG_ERR("env JSON encode failed (%d)", ret);
             }
-#endif
         }
 
-        /* ── Sound queue → JSON → Azure (1 in 10) ─────────── */
+        /* ── AS7343 spectrum ──────────────────────────────── */
+        mod_spec_t as7_msg;
+        if (k_msgq_get(&as7_msgq, &as7_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_spec(&as7_msg, s_as7_json, sizeof(s_as7_json));
+            if (ret > 0) {
+                LOG_INF("as7 JSON");
+                // LOG_INF("as7 JSON: %s", s_as7_json);
+                azure_mqtt_publish(s_as7_json);
+            } else {
+                LOG_ERR("spec JSON encode failed (%d)", ret);
+            }
+        }
+
+        /* ── Soil moisture ────────────────────────────────── */
+        mod_mst_t mst_msg;
+        if (k_msgq_get(&mst_msgq, &mst_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_mst(&mst_msg, s_mst_json, sizeof(s_mst_json));
+            if (ret > 0) {
+                LOG_INF("mst JSON: %s", s_mst_json);
+                azure_mqtt_publish(s_mst_json);
+            } else {
+                LOG_ERR("mst JSON encode failed (%d)", ret);
+            }
+        }
+
+        /* ── Battery ──────────────────────────────────────── */
+        mod_bat_t bat_msg;
+        if (k_msgq_get(&bat_msgq, &bat_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_bat(&bat_msg, s_bat_json, sizeof(s_bat_json));
+            if (ret > 0) {
+                LOG_INF("bat JSON: %s", s_bat_json);
+                azure_mqtt_publish(s_bat_json);
+            } else {
+                LOG_ERR("bat JSON encode failed (%d)", ret);
+            }
+        }
+
+        /* ── Sound spectrum (throttled 1:10) ─────────────── */
         struct sound_queue_pkt_t sqpkt;
         if (k_msgq_get(&sound_msgq, &sqpkt, K_MSEC(5)) == 0) {
-#if DEBUG_PRINT_RAW
-            printk("[SOUND RAW] rms=%d bins[0]=%u bins[1]=%u ...\n",
-                   sqpkt.sp.rms_dbfs_x100,
-                   sqpkt.sp.bins[0], sqpkt.sp.bins[1]);
-#else
-            if (++sound_pkt_count >= 10) {
-                sound_pkt_count = 0;
-
-                memcpy(&s_sound_pkt, &sqpkt.sp, sizeof(s_sound_pkt));
-                /* Stamp current UTC as uptime approximation */
-                s_sound_pkt.uptime_ms = k_uptime_get_32();
-
-                int ret = encode_sound_json(&s_sound_pkt,
-                                            s_sound_json, sizeof(s_sound_json));
+            if (++sound_throttle >= 10) {
+                sound_throttle = 0;
+                int ret = json_encode_snd(&sqpkt.sp, s_snd_json, sizeof(s_snd_json));
                 if (ret > 0) {
-                    int pub = azure_mqtt_publish(s_sound_json);
-                    if (pub < 0) LOG_WRN("Sound publish failed (%d)", pub);
-                    else         LOG_INF("Sound published (%d bytes JSON)", ret);
+                    // LOG_INF("snd JSON: %s", s_snd_json);
+                    LOG_INF("snd JSON");
+                    azure_mqtt_publish(s_snd_json);
                 } else {
-                    LOG_ERR("Sound JSON encode failed (%d)", ret);
+                    LOG_ERR("snd JSON encode failed (%d)", ret);
                 }
-            } else {
-                LOG_DBG("Sound skipped (%u/10)", sound_pkt_count);
             }
-#endif
         }
     }
 }
 
-/* ── base_thread ────────────────────────────────────────── */
 void base_thread(void)
 {
     int err = bt_enable(NULL);

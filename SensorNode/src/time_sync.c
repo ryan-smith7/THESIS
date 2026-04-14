@@ -155,8 +155,9 @@ uint32_t time_sync_get_utc_ms(uint16_t *out_ms)
 
     if (point_count == 0) {
         k_spin_unlock(&lock, key);
-        if (out_ms) *out_ms = 0;
-        return 0;
+        uint32_t uptime_ms = k_uptime_get_32();
+        if (out_ms) *out_ms = (uint16_t)(uptime_ms % 1000U);
+        return uptime_ms / 1000U;
     }
 
     uint32_t local_elapsed_ms = k_uptime_get_32() - base_local_ms;

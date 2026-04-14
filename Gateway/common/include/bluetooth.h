@@ -24,7 +24,7 @@
 #if defined(CONFIG_ETH_GATEWAY)
 #  define BASE_CONTROL_STACK_SIZE  1536
 #  define BASE_PROCESS_STACK_SIZE  4096   /* headroom for 4 KB sound JSON encode */
-#  define MAX_CONN                 2      /* max simultaneous BLE peripheral connections */
+#  define MAX_CONN                 3      /* max simultaneous BLE peripheral connections */
 #else
 #  define BASE_CONTROL_STACK_SIZE  2048
 #  define BASE_PROCESS_STACK_SIZE  6144   /* headroom for 4 KB sound JSON encode */

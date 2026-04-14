@@ -61,6 +61,7 @@
 /* -----------------------------------------------------------------------
  * Public API
  * --------------------------------------------------------------------- */
+bool azure_mqtt_is_connected(void);
 int  azure_mqtt_connect(void);
 int  azure_mqtt_publish(const char *json);
 void azure_mqtt_process(void);

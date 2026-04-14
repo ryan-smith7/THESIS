@@ -14,7 +14,8 @@
 #include "bluetooth.h"
 #include "sensor.h"
 
-#include "time_sync.h" 
+#include "time_sync.h"
+#include "sd_log.h"
 
 #ifndef CONFIG_BT_DEVICE_NAME
 #define CONFIG_BT_DEVICE_NAME "SensorNode"
@@ -67,7 +68,7 @@ static ssize_t write_handler(struct bt_conn *conn,
 static void ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value);
 static void connected(struct bt_conn *conn, uint8_t err);
 static void disconnected(struct bt_conn *conn, uint8_t reason);
-static void print_packed_data();
+// static void print_packed_data();
 extern void pack_sensor_data(const struct sensor_blk *sensor);
 extern int init_bluetooth(void);
 extern int start_advertising(void);
@@ -87,6 +88,8 @@ static struct bt_conn_cb conn_callbacks = {
     .connected = connected,
     .disconnected = disconnected,
 };
+
+static K_SEM_DEFINE(adv_restart_sem, 0, 1);
 
 /*
 GATT (Generic Attribute Profile) is a protocol used in Bluetooth Low Energy (BLE) 
@@ -236,25 +239,50 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     current_conn = bt_conn_ref(conn);
     printk("[TRACKER] Connected\n");
     ble_tick = 1;
+
+#if defined(CONFIG_SD_LOGGING)
+    if (sd_log_is_ready()) {
+        sd_log_set_draining(true);
+        k_sem_give(&sd_drain_sem);
+    }
+#endif
 }
 
-/**
- * @brief Bluetooth disconnection callback triggered when the device disconnects.
- *
- * This function is called when the BLE connection is disconnected, prints the
- * disconnection reason, unreferencing, clearing the current connection, and resetting
- * the BLE tick flag.
- *
- * @param conn   Pointer to the disconnected connection object.
- * @param reason Reason code for the disconnection.
+/*
+ * On disconnect, unreference the connection and give semaphore to restart advertising so
+ * the gateway can reconnect
  */
-static void disconnected(struct bt_conn *conn, uint8_t reason) {
+static void disconnected(struct bt_conn *conn, uint8_t reason)
+{
     printk("[TRACKER] Disconnected (reason 0x%02x)\n", reason);
+
     if (current_conn) {
         bt_conn_unref(current_conn);
         current_conn = NULL;
     }
+
+    notify_enabled = false;
     ble_tick = 0;
+
+    k_sem_give(&adv_restart_sem);
+}
+
+static void start_advertising_with_retry(bool after_disconnect)
+{
+    if (after_disconnect) {
+        k_sleep(K_MSEC(500));
+    }
+
+    while (1) {
+        int err = bt_le_adv_start(&adv_params, ad, ARRAY_SIZE(ad),
+                                   sd, ARRAY_SIZE(sd));
+        if (err == 0) {
+            printk("[TRACKER] Advertising started\n");
+            return;
+        }
+        printk("[TRACKER] Advertising failed (%d) — retrying in 1s\n", err);
+        k_sleep(K_SECONDS(1));
+    }
 }
 
 /**
@@ -278,86 +306,86 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     [57..58] snd_peak_mag_x10  2 bytes
     [59..60] soil_vwc_x100     2 bytes
  */
-static void print_packed_data(void)
-{
-    size_t i = 0;
+// static void print_packed_data(void)
+// {
+//     size_t i = 0;
 
-    // time + time_ms
-    uint32_t timestamp =
-        ((uint32_t)packed_data[i] << 24) |
-        ((uint32_t)packed_data[i+1] << 16) |
-        ((uint32_t)packed_data[i+2] << 8) |
-         (uint32_t)packed_data[i+3];
-    i += 4;
+//     // time + time_ms
+//     uint32_t timestamp =
+//         ((uint32_t)packed_data[i] << 24) |
+//         ((uint32_t)packed_data[i+1] << 16) |
+//         ((uint32_t)packed_data[i+2] << 8) |
+//          (uint32_t)packed_data[i+3];
+//     i += 4;
 
-    uint16_t time_ms = ((uint16_t)packed_data[i] << 8) | packed_data[i+1];
-    i += 2;
+//     uint16_t time_ms = ((uint16_t)packed_data[i] << 8) | packed_data[i+1];
+//     i += 2;
 
-    // uptime_ms
-    uint32_t uptime_ms =
-        ((uint32_t)packed_data[i] << 24) |
-        ((uint32_t)packed_data[i+1] << 16) |
-        ((uint32_t)packed_data[i+2] << 8) |
-         (uint32_t)packed_data[i+3];
-    i += 4;
+//     // uptime_ms
+//     uint32_t uptime_ms =
+//         ((uint32_t)packed_data[i] << 24) |
+//         ((uint32_t)packed_data[i+1] << 16) |
+//         ((uint32_t)packed_data[i+2] << 8) |
+//          (uint32_t)packed_data[i+3];
+//     i += 4;
 
-    // meta
-    uint8_t proto_ver = packed_data[i++];
-    uint8_t dev_id_p  = packed_data[i++];
+//     // meta
+//     uint8_t proto_ver = packed_data[i++];
+//     uint8_t dev_id_p  = packed_data[i++];
 
-    // BME280
-    int16_t temp_x100   = (int16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
-    int16_t rh_x100     = (int16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
-    int32_t p_hPa_x1000 = (int32_t)(
-        ((uint32_t)packed_data[i]   << 24) |
-        ((uint32_t)packed_data[i+1] << 16) |
-        ((uint32_t)packed_data[i+2] <<  8) |
-         (uint32_t)packed_data[i+3]);
-    i += 4;
+//     // BME280
+//     int16_t temp_x100   = (int16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     int16_t rh_x100     = (int16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     int32_t p_hPa_x1000 = (int32_t)(
+//         ((uint32_t)packed_data[i]   << 24) |
+//         ((uint32_t)packed_data[i+1] << 16) |
+//         ((uint32_t)packed_data[i+2] <<  8) |
+//          (uint32_t)packed_data[i+3]);
+//     i += 4;
 
-    // ENS160
-    uint16_t eco2_ppm = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
-    uint16_t tvoc_ppb = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
-    uint8_t  aqi      = packed_data[i++];
+//     // ENS160
+//     uint16_t eco2_ppm = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     uint16_t tvoc_ppb = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     uint8_t  aqi      = packed_data[i++];
 
-    // AS7343
-    static const uint16_t wl[13] = {
-        405,425,450,475,515,550,555,600,640,690,745,855,999
-    };
-    uint16_t ch[13];
-    for (int k = 0; k < 13; k++) {
-        ch[k] = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]);
-        i += 2;
-    }
+//     // AS7343
+//     static const uint16_t wl[13] = {
+//         405,425,450,475,515,550,555,600,640,690,745,855,999
+//     };
+//     uint16_t ch[13];
+//     for (int k = 0; k < 13; k++) {
+//         ch[k] = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]);
+//         i += 2;
+//     }
 
-    // Battery
-    uint16_t batt_mV = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     // Battery
+//     uint16_t batt_mV = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
 
-    // Sound
-    int16_t  snd_rms  = (int16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
-    uint16_t snd_freq = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
-    uint16_t snd_mag  = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     // Sound
+//     int16_t  snd_rms  = (int16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     uint16_t snd_freq = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     uint16_t snd_mag  = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
 
-    // Soil
-    uint16_t vwc = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
+//     // Soil
+//     uint16_t vwc = (uint16_t)((packed_data[i] << 8) | packed_data[i+1]); i += 2;
 
-    // ---- Print ----
-    printk("[TRACKER] Parsed Data:\n");
-    printk("  Time: %u.%03u  Uptime: %u ms  Ver: %u  DevID: %u\n",
-           timestamp, time_ms, uptime_ms, proto_ver, dev_id_p);
-    printk("  BME280: T=%.2f C  RH=%.2f %%  P=%.3f hPa\n",
-           temp_x100 / 100.0f, rh_x100 / 100.0f, p_hPa_x1000 / 1000.0f);
-    printk("  ENS160: eCO2=%u ppm  TVOC=%u ppb  AQI=%u\n",
-           eco2_ppm, tvoc_ppb, aqi);
-    for (int k = 0; k < 13; k++) {
-        if (wl[k] == 999) printk("  AS7343_VISIBLE: %u\n", ch[k]);
-        else               printk("  AS7343_%unm: %u\n", wl[k], ch[k]);
-    }
-    printk("  Batt: %u mV\n", batt_mV);
-    printk("  Sound: %.2f dBFS  Peak %u Hz  Mag %.1f\n",
-           snd_rms / 100.0f, snd_freq, snd_mag / 10.0f);
-    printk("  Soil VWC: %.2f%%\n", vwc / 100.0f);
-}
+//     // ---- Print ----
+//     printk("[TRACKER] Parsed Data:\n");
+//     printk("  Time: %u.%03u  Uptime: %u ms  Ver: %u  DevID: %u\n",
+//            timestamp, time_ms, uptime_ms, proto_ver, dev_id_p);
+//     printk("  BME280: T=%.2f C  RH=%.2f %%  P=%.3f hPa\n",
+//            temp_x100 / 100.0, rh_x100 / 100.0, p_hPa_x1000 / 1000.0);
+//     printk("  ENS160: eCO2=%u ppm  TVOC=%u ppb  AQI=%u\n",
+//            eco2_ppm, tvoc_ppb, aqi);
+//     for (int k = 0; k < 13; k++) {
+//         if (wl[k] == 999) printk("  AS7343_VISIBLE: %u\n", ch[k]);
+//         else               printk("  AS7343_%unm: %u\n", wl[k], ch[k]);
+//     }
+//     printk("  Batt: %u mV\n", batt_mV);
+//     printk("  Sound: %.2f dBFS  Peak %u Hz  Mag %.1f\n",
+//            snd_rms / 100.0, snd_freq, snd_mag / 10.0);
+//     printk("  Soil VWC: %.2f%%\n", vwc / 100.0);
+// }
 
 
 /**
@@ -375,7 +403,6 @@ extern int init_bluetooth(void) {
         printk("[TRACKER] Bluetooth init failed (err %d)\n", err);
         return err;
     }
-    printk("here1");
     bt_conn_cb_register(&conn_callbacks);
 
     return 0;
@@ -532,35 +559,63 @@ extern void pack_sensor_data(const struct sensor_blk *s)
     }
 }
 
-void tracker_thread(void)
-{   
-    // k_sleep(K_SECONDS(5));
+// void tracker_thread(void)
+// {   
+//     // k_sleep(K_SECONDS(5));
     
-    /* init_bluetooth() should just call bt_enable(cb) and return 0 on success */
-    int rc = init_bluetooth();
-    if (rc) {
-        // i2c_gate_release();
-        return; /* or retry later */
+//     /* init_bluetooth() should just call bt_enable(cb) and return 0 on success */
+//     int rc = init_bluetooth();
+//     if (rc) {
+//         // i2c_gate_release();
+//         return; /* or retry later */
+//     }
+
+//     while (1) {
+//         // i2c_gate_acquire();
+//         if (start_advertising()) {
+//             break;
+//         }
+
+//         // for (int i = 0; i < 20; ++i) {  // ~30 seconds of data, for example
+//         //     struct sensor_blk s;
+//         //     /* Wait until a full sample is available */
+//         //     if (k_msgq_get(&full_q, &s, K_SECONDS(2)) == 0) {
+//         //         pack_sensor_data(&s);
+//         //         // Optional debug:
+//         //         print_packed_data();
+//         //     } else {
+//         //         /* No sample in 2s: continue (or log) */
+//         //     }
+//         // }
+//         k_sleep(K_SECONDS(10));
+//         (void)stop_advertising_and_disconnect();
+//         k_sleep(K_SECONDS(1));
+//         // k_sleep(K_FOREVER);
+//     }
+// }
+
+
+/*
+ *
+ * Initialise BT, start advertising once, then block forever.
+ * All reconnection logic lives in disconnected() above — no polling loop
+ * needed here. The thread stays alive so Zephyr doesn't clean it up.
+ *
+ * The combiner_thread / modality BLE threads handle all data flow
+ * independently, so tracker_thread has nothing else to do.
+ */
+void tracker_thread(void)
+{
+    int err = init_bluetooth();
+    if (err) {
+        printk("[TRACKER] Bluetooth init failed (%d)\n", err);
+        return;
     }
 
+    start_advertising_with_retry(false);
+
     while (1) {
-        // i2c_gate_acquire();
-        if (start_advertising()) break;
-
-        for (int i = 0; i < 20; ++i) {  // ~30 seconds of data, for example
-            struct sensor_blk s;
-            /* Wait until a full sample is available */
-            if (k_msgq_get(&full_q, &s, K_SECONDS(2)) == 0) {
-                pack_sensor_data(&s);
-                // Optional debug:
-                print_packed_data();
-            } else {
-                /* No sample in 2s: continue (or log) */
-            }
-        }
-
-        (void)stop_advertising_and_disconnect();
-        k_sleep(K_SECONDS(5));
-        // k_sleep(K_FOREVER);
+        k_sem_take(&adv_restart_sem, K_FOREVER);
+        start_advertising_with_retry(true);
     }
 }
