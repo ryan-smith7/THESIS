@@ -18,6 +18,11 @@ config SENSOR_NODE_2
       Enables AS7343 light spectrum and capacitive
       soil moisture sensor threads.
 
+config SENSOR_NODE_3
+    bool "Sensor Node 3 (current or voltage)"
+    help
+      Enables current/voltage sensor threads.
+
 endchoice
 
 config SD_LOGGING

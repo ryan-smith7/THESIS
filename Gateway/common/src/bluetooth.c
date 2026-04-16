@@ -37,6 +37,7 @@
 #define MSGQ_MAX_MSGS   4
 
 /* ── Payload lengths ─────────────────────────────────────── */
+#define CUR_PAYLOAD_LEN   10   /* utc_sec(4)+utc_ms(2)+current_uA(2)+voltage_mV(2) */
 #define BME_PAYLOAD_LEN  14  /* +2 for utc_ms */
 #define ENS_PAYLOAD_LEN  11  /* +2 for utc_ms */
 #define AS7_PAYLOAD_LEN  32  /* +2 for utc_ms */
@@ -93,6 +94,11 @@ static struct bt_uuid_128 bat_char_uuid = BT_UUID_INIT_128(
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
     0x02, 0x00, 0x00, 0xBA);
 
+static struct bt_uuid_128 cur_char_uuid = BT_UUID_INIT_128(
+    0xCC, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xCC);
+
 static struct bt_uuid_16 cccd_uuid = BT_UUID_INIT_16(0x2902);
 
 /* ═══════════════════════════════════════════════════════════
@@ -114,6 +120,7 @@ DECL_MOD(ens);
 DECL_MOD(as7);
 DECL_MOD(mst);
 DECL_MOD(bat);
+DECL_MOD(cur);
 
 /* Environment accumulator — merge BME + ENS before enqueuing */
 static mod_env_t env_acc[MAX_CONN];
@@ -135,6 +142,7 @@ K_MSGQ_DEFINE(env_msgq, sizeof(mod_env_t),  MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(as7_msgq, sizeof(mod_spec_t), MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(mst_msgq, sizeof(mod_mst_t),  MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(bat_msgq, sizeof(mod_bat_t),  MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(cur_msgq,   sizeof(mod_cur_t),                MSGQ_MAX_MSGS, 4);
 
 struct sound_queue_pkt_t { mod_snd_t sp; };
 K_MSGQ_DEFINE(sound_msgq, sizeof(struct sound_queue_pkt_t), 2, 4);
@@ -152,6 +160,7 @@ static void discover_ens_char(struct bt_conn *conn, int index);
 static void discover_as7_char(struct bt_conn *conn, int index);
 static void discover_mst_char(struct bt_conn *conn, int index);
 static void discover_bat_char(struct bt_conn *conn, int index);
+static void discover_cur_char(struct bt_conn *conn, int index);
 static void discover_done(struct bt_conn *conn, int index);
 
 /* ═══════════════════════════════════════════════════════════
@@ -342,6 +351,29 @@ static uint8_t bat_notify_func(struct bt_conn *conn,
     return BT_GATT_ITER_CONTINUE;
 }
 
+/* ── Current sensor (10 bytes: utc_sec(4)+utc_ms(2)+current_uA(2)+voltage_mV(2)) ── */
+static uint8_t cur_notify_func(struct bt_conn *conn,
+                                struct bt_gatt_subscribe_params *params,
+                                const void *data, uint16_t length)
+{
+    if (!data || length != CUR_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+    int idx = get_conn_index(conn);
+    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+ 
+    const uint8_t *d = data;
+    mod_cur_t msg;
+    msg.dev_id      = (uint8_t)idx;
+    msg.utc_sec     = be32(d + 0);
+    msg.utc_ms      = be16(d + 4);
+    msg.current_uA  = be16s(d + 6);
+    msg.voltage_mV  = be16(d + 8);
+ 
+    if (k_msgq_put(&cur_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[CUR %d] queue full", idx);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
 /* ── Sound spectrum (existing reassembly — unchanged) ────────────────── */
 static uint8_t sound_notify_func(struct bt_conn *conn,
                                   struct bt_gatt_subscribe_params *params,
@@ -520,7 +552,8 @@ MODALITY_DISC_FUNCS(bme,   discover_ens_char,  bme_notify_func)
 MODALITY_DISC_FUNCS(ens,   discover_as7_char,  ens_notify_func)
 MODALITY_DISC_FUNCS(as7,   discover_mst_char,  as7_notify_func)
 MODALITY_DISC_FUNCS(mst,   discover_bat_char,  mst_notify_func)
-MODALITY_DISC_FUNCS(bat,   discover_done,      bat_notify_func)
+MODALITY_DISC_FUNCS(bat,   discover_cur_char,  bat_notify_func)
+MODALITY_DISC_FUNCS(cur,   discover_done,      cur_notify_func)
 
 /* ═══════════════════════════════════════════════════════════
  * Scan and connection management
@@ -634,6 +667,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         as7_char_handles[index]    = 0;
         mst_char_handles[index]    = 0;
         bat_char_handles[index]    = 0;
+        cur_char_handles[index]    = 0;
         env_bme_ready[index]       = false;
         env_ens_ready[index]       = false;
         memset(&sound_rx[index], 0, sizeof(sound_rx[index]));
@@ -660,6 +694,7 @@ K_THREAD_STACK_DEFINE(process_stack, PROCESS_STACK_SIZE);
 #endif
 
 #if defined(CONFIG_ESP_SPIRAM)
+static char s_cur_json[JSON_CUR_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_env_json[JSON_ENV_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_as7_json[JSON_SPEC_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static char s_mst_json[JSON_MST_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
@@ -671,6 +706,7 @@ static char s_as7_json[JSON_SPEC_BUF_SIZE];
 static char s_mst_json[JSON_MST_BUF_SIZE];
 static char s_bat_json[JSON_BAT_BUF_SIZE];
 static char s_snd_json[JSON_SND_BUF_SIZE];
+static char s_cur_json[JSON_CUR_BUF_SIZE];
 #endif
 
 static uint8_t sound_throttle = 0;
@@ -713,7 +749,7 @@ void process_data_thread(void)
             int ret = json_encode_env(&env_msg, s_env_json, sizeof(s_env_json));
             if (ret > 0) {
                 LOG_INF("env JSON");
-                // LOG_INF("env JSON: %s", s_env JSON);
+                // LOG_INF("env JSON: %s", s_env_JSON);
                 azure_mqtt_publish(s_env_json);
             } else {
                 LOG_ERR("env JSON encode failed (%d)", ret);
@@ -770,6 +806,17 @@ void process_data_thread(void)
                 } else {
                     LOG_ERR("snd JSON encode failed (%d)", ret);
                 }
+            }
+        }
+        /* ── Current sensor ───────────────────────────────── */
+        mod_cur_t cur_msg;
+        if (k_msgq_get(&cur_msgq, &cur_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_cur(&cur_msg, s_cur_json, sizeof(s_cur_json));
+            if (ret > 0) {
+                LOG_INF("cur JSON: %s", s_cur_json);
+                azure_mqtt_publish(s_cur_json);
+            } else {
+                LOG_ERR("cur JSON encode failed (%d)", ret);
             }
         }
     }

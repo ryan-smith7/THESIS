@@ -18,6 +18,7 @@
 #include "as7_ble.h"
 #include "mst_ble.h"
 #include "bat_ble.h"
+#include "cur_ble.h"
  
 #include <zephyr/types.h>
 #include <zephyr/sys/printk.h>
@@ -110,8 +111,19 @@ K_THREAD_DEFINE(mst_ble_tid, MST_BLE_STACK_SIZE, mst_ble_thread,
                 NULL, NULL, NULL,
                 MST_BLE_PRIORITY, 0, 0);
 
+#elif defined(CONFIG_SENSOR_NODE_3)
+                /* Sensor acquisition thread */
+K_THREAD_DEFINE(current_tid, 2 * CUR_BLE_STACK_SIZE, current_thread,
+                NULL, NULL, NULL,
+                CUR_BLE_PRIORITY, 0, 0);
+ 
+/* BLE modality thread */
+K_THREAD_DEFINE(cur_ble_tid, CUR_BLE_STACK_SIZE, cur_ble_thread,
+                NULL, NULL, NULL,
+                CUR_BLE_PRIORITY, 0, 0);
+
 #else
-#error "No sensor node selected. Set CONFIG_SENSOR_NODE_1=y or CONFIG_SENSOR_NODE_2=y in prj.conf"
+#error "No sensor node selected. Set CONFIG_SENSOR_NODE_1=y or CONFIG_SENSOR_NODE_2=y,  CONFIG_SENSOR_NODE_3=y in prj.conf"
 
 #endif
 

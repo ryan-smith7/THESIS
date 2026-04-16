@@ -179,3 +179,25 @@ int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size)
     if (tail <= 0) return -ENOMEM;
     return pos + tail;
 }
+
+int json_encode_cur(const mod_cur_t *m, char *buf, size_t buf_size)
+{
+    if (!m || !buf) return -EINVAL;
+ 
+    return snprintk(buf, buf_size,
+        "{"
+          "\"deviceId\":\"dev-%u\","
+          "\"utc_sec\":%u,"
+          "\"utc_ms\":%u,"
+          "\"current\":{"
+            "\"current_mA\":%.3f,"
+            "\"voltage_mV\":%u"
+          "}"
+        "}",
+        (unsigned)m->dev_id,
+        (unsigned)m->utc_sec,
+        (unsigned)m->utc_ms,
+        (double)m->current_uA / 1000.0,
+        (unsigned)m->voltage_mV
+    );
+}

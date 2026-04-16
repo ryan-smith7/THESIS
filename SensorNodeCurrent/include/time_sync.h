@@ -22,6 +22,8 @@
 #define TIMESYNC_MAGIC       0xFE
 #define TIMESYNC_PACKET_LEN  7     /* magic(1) + utc_sec(4) + utc_ms(2) */
 
+#define SD_LOG_UTC_MIN  1700000000U
+
 /**
  * @brief Process an incoming GATT write buffer for a time sync packet.
  *

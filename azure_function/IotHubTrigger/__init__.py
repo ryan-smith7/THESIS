@@ -39,7 +39,6 @@ def _parse_iso(ts_raw: str):
         return datetime.utcnow()
 
 
-
 def _sensor_timestamp(msg: dict):
     """
     Reconstruct a UTC datetime from utc_sec + utc_ms stamped on the sensor node.
@@ -93,6 +92,8 @@ def _detect_type(msg: dict) -> str:
         return "battery"
     if "sound" in msg:
         return "sound"
+    if "current" in msg:
+        return "current"
 
     return "unknown"
 
@@ -101,8 +102,7 @@ def _detect_type(msg: dict) -> str:
 
 def _handle_environment(cursor, msg: dict, body: str):
     # batt_mV removed — battery arrives via its own dedicated modality
-    device_id = msg.get("deviceId", "unknown")
-    # CHANGE: use sensor timestamp
+    device_id        = msg.get("deviceId", "unknown")
     timestamp        = _sensor_timestamp(msg)
 
     env = msg.get("environment", {}) or {}
@@ -148,8 +148,7 @@ def _handle_environment(cursor, msg: dict, body: str):
 
 
 def _handle_spectrum(cursor, msg: dict, body: str):
-    device_id = msg.get("deviceId", "unknown")
-    # CHANGE: use sensor timestamp
+    device_id  = msg.get("deviceId", "unknown")
     timestamp  = _sensor_timestamp(msg)
 
     spec = msg.get("spectrum", {}) or {}
@@ -205,9 +204,7 @@ def _handle_spectrum(cursor, msg: dict, body: str):
 
 def _handle_soil(cursor, msg: dict, body: str):
     device_id        = msg.get("deviceId", "unknown")
-    # CHANGE: use sensor timestamp
     timestamp        = _sensor_timestamp(msg)
-
     soil             = msg.get("soil", {}) or {}
     soil_vwc_percent = _to_float(soil.get("vwc_percent"), 0.0)
 
@@ -245,18 +242,12 @@ def _handle_soil(cursor, msg: dict, body: str):
 
 
 def _handle_battery(cursor, msg: dict, body: str):
-    # sensor_dev_id comes from inside the battery object — this is the actual
-    # device ID stamped by the sensor node in the BLE payload, used to
-    # separate Node 1 vs Node 2 battery graphs in Grafana.
-    # device_id at the top level is the gateway connection index; sensor_dev_id
-    # is the physical device identifier set by DEVICE_ID on the sensor node.
+    # sensor_dev_id comes from inside the battery object — the physical device
+    # ID stamped by the sensor node, used to separate Node 1 vs Node 2 in Grafana.
     bat           = msg.get("battery", {}) or {}
     sensor_dev_id = _to_int(bat.get("sensor_dev_id"), 0)
     device_id     = f"dev-{sensor_dev_id}" if sensor_dev_id else msg.get("deviceId", "unknown")
-
-    # CHANGE: use sensor timestamp instead of datetime.utcnow()
     timestamp     = _sensor_timestamp(msg)
-
     batt_mv       = _to_int(bat.get("mV"),           0)
     batt_pct      = _to_int(bat.get("pct"),           0)
     batt_rate     = _to_float(bat.get("rate_pct_hr"), 0.0)
@@ -301,7 +292,6 @@ def _handle_battery(cursor, msg: dict, body: str):
 def _handle_sound(cursor, msg: dict, body: str):
     if "sound" in msg:
         device_id = msg.get("deviceId", "unknown")
-        uptime_ms = _to_int(msg.get("uptime_ms"), 0)
         snd       = msg.get("sound", {}) or {}
         rms_dbfs  = _to_float(snd.get("rms_dbfs"),  0.0)
         peak_freq = _to_int(snd.get("peak_freq_hz"), 0)
@@ -309,16 +299,17 @@ def _handle_sound(cursor, msg: dict, body: str):
         bins      = snd.get("bins", []) or []
         bin_low   = 43
         bin_res   = 43
+        timestamp = _sensor_timestamp(msg)
     else:
         payload   = msg.get("payload", {}) or {}
         device_id = payload.get("deviceId", "unknown")
-        uptime_ms = _to_int(payload.get("uptime_ms"),  0)
         rms_dbfs  = _to_float(payload.get("rms_dbfs"), 0.0)
         bin_low   = _to_int(payload.get("bin_low_hz"), 43)
         bin_res   = _to_int(payload.get("bin_res_hz"), 43)
         bins      = payload.get("bins", []) or []
         peak_freq = 0
         peak_mag  = 0.0
+        timestamp = datetime.utcnow()
 
     cursor.execute(
         """
@@ -332,11 +323,34 @@ def _handle_sound(cursor, msg: dict, body: str):
             raw_payload
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        device_id, _sensor_timestamp(msg) if "sound" in msg else datetime.utcnow(), None, rms_dbfs,
+        device_id, timestamp, None, rms_dbfs,
         bin_low, bin_res, json.dumps(bins),
         'GW-01', '', '1', 'sound', body[:4000]
     )
     logger.info("sound inserted: dev=%s rms=%.2f bins=%d", device_id, rms_dbfs, len(bins))
+
+
+def _handle_current(cursor, msg: dict, body: str):
+    device_id  = msg.get("deviceId", "unknown")
+    timestamp  = _sensor_timestamp(msg)
+    cur        = msg.get("current", {}) or {}
+    current_mA = _to_float(cur.get("current_mA"), 0.0)
+    voltage_mV = _to_int(cur.get("voltage_mV"),   0)
+
+    cursor.execute(
+        """
+        INSERT INTO telemetry_current (
+            device_id, timestamp,
+            current_mA, voltage_mV,
+            gateway_id, raw_payload
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        device_id, timestamp,
+        current_mA, voltage_mV,
+        'GW-01', body
+    )
+    logger.info("current inserted: dev=%s ts=%s mA=%.3f mV=%d",
+                device_id, timestamp, current_mA, voltage_mV)
 
 
 def _handle_legacy_telemetry(cursor, msg: dict, body: str):
@@ -436,7 +450,7 @@ def main(events) -> None:
         return
 
     counts = {"environment": 0, "spectrum": 0, "soil": 0,
-              "battery": 0, "sound": 0, "legacy": 0, "skipped": 0}
+              "battery": 0, "sound": 0, "current": 0, "legacy": 0, "skipped": 0}
 
     for event in events:
         try:
@@ -471,6 +485,10 @@ def main(events) -> None:
                     _handle_sound(cursor, msg, body)
                     counts["sound"] += 1
 
+                elif msg_type == "current":
+                    _handle_current(cursor, msg, body)
+                    counts["current"] += 1
+
                 elif msg_type == "telemetry":
                     _handle_legacy_telemetry(cursor, msg, body)
                     counts["legacy"] += 1
@@ -494,7 +512,7 @@ def main(events) -> None:
             pass
 
     logger.warning(
-        "Batch complete — env=%d spec=%d soil=%d bat=%d snd=%d legacy=%d skipped=%d",
+        "Batch complete — env=%d spec=%d soil=%d bat=%d snd=%d cur=%d legacy=%d skipped=%d",
         counts["environment"], counts["spectrum"], counts["soil"],
-        counts["battery"], counts["sound"], counts["legacy"], counts["skipped"]
+        counts["battery"], counts["sound"], counts["current"], counts["legacy"], counts["skipped"]
     )

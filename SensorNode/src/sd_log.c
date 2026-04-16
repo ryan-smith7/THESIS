@@ -531,7 +531,7 @@ void sd_drain_thread(void)
         drain_as7();
         drain_mst();
         #else
-        #error "No sensor node selected."
+        // #error "No sensor node selected."
         #endif
 
         sd_log_set_draining(false);

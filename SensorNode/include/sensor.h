@@ -74,6 +74,12 @@ struct ens160_msg { int eco2_ppm, tvoc_ppb, aqi;       uint32_t utc_sec; uint16_
 struct as7343_msg { uint16_t ch[AS7343_NUM_CH];         uint32_t utc_sec; uint16_t utc_ms; };
 struct batt_msg   { uint16_t mV; uint8_t pct; int16_t rate_x10; uint32_t utc_sec; uint16_t utc_ms; };
 struct moisture_msg { uint16_t vwc_x100;                uint32_t utc_sec; uint16_t utc_ms; };
+struct current_msg { //CURRENT ADDITION
+    int16_t  current_uA;   /* microamps signed — e.g. 1500 = 1.500 mA  */
+    uint16_t voltage_mV;   /* millivolts       — e.g. 3300 = 3.300 V   */
+    uint32_t utc_sec;      /* UTC seconds at measurement (0 = unsynced) */
+    uint16_t utc_ms;       /* UTC milliseconds 0-999                    */
+};
 
 /* -------- Message queues -------- */
 #define Q_DEPTH 8
@@ -85,6 +91,7 @@ extern struct k_msgq batt_q;
 extern struct k_msgq full_q;
 extern struct k_msgq sound_q;
 extern struct k_msgq moisture_q;
+extern struct k_msgq current_q;  //CURRENT ADDITION
 
 extern void set_logging_state(uint8_t new_value);
 extern void set_logging_file(char* file_abs_path);
@@ -96,5 +103,6 @@ extern void max17048_thread(void);
 extern void combiner_thread(void);
 extern void moisture_thread(void);
 extern void sensor_control_thread(void);
+extern void current_thread(void); //CURRENT ADDITION
 
 #endif /* SENSOR_H */

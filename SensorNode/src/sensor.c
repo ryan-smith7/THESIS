@@ -360,6 +360,9 @@ void max17048_thread(void)
 }
 #endif
 
+
+
+
 /* -------------------------------------------------------------------------- */
 /* --- Combiner thread ------------------------------------------------------ */
 /* Retains latest partials and emits a full frame once per tick             */

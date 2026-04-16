@@ -33,9 +33,9 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 
-#if defined(CONFIG_SD_LOGGING)
+// #if defined(CONFIG_SD_LOGGING)
 #include "sd_log.h"
-#endif
+// #endif
 
 LOG_MODULE_REGISTER(sound_ble, LOG_LEVEL_INF);
 

@@ -50,6 +50,7 @@ static struct k_spinlock  lock;
  * slope < 1  → local clock runs slow (negative drift_ppm)
  */
 static void update_drift(void) {
+    
     if (point_count < 2) {
         return;
     }
@@ -100,6 +101,7 @@ static void update_drift(void) {
 /* ── Public API ─────────────────────────────────────────── */
 
 bool time_sync_handle_write(const void *buf, uint16_t len) {
+
     if (len < TIMESYNC_PACKET_LEN) {
         return false;
     }
