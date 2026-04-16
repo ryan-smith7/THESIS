@@ -26,6 +26,6 @@
 
 /* ── Public API ─────────────────────────────────────────── */
 extern void cur_ble_thread(void);
-extern void cur_ble_notify_offline(const struct current_msg *msg);
+extern void cur_pack_and_notify(const struct current_msg *msg);
 
 #endif /* CUR_BLE_H */

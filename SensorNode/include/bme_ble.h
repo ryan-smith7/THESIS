@@ -8,6 +8,6 @@
 
 extern void bme_ble_thread(void);
 
-extern void bme_ble_notify_offline(const struct bme280_msg *msg);
+extern void bme_pack_and_notify(const struct bme280_msg *msg);
 
 #endif /* BME_BLE_H */

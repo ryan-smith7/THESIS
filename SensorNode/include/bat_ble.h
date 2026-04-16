@@ -8,6 +8,6 @@
 
 extern void bat_ble_thread(void);
 
-extern void bat_ble_notify_offline(const struct batt_msg *msg);
+extern void bat_pack_and_notify(const struct batt_msg *msg);
 
 #endif /* BAT_BLE_H */

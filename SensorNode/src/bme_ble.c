@@ -39,14 +39,20 @@ MODALITY_CCC_CHANGED(bme, bme_notify_enabled);
 MODALITY_READ_HANDLER(bme, bme_buf, BME_BUF_LEN);
 MODALITY_GATT_SERVICE(bme, BME_SVC_UUID_BYTES, BME_CHR_UUID_BYTES);
 
-static void bme_connected(struct bt_conn *conn, uint8_t err)
-{
-    if (!err) bme_conn = bt_conn_ref(conn);
+static void bme_connected(struct bt_conn *conn, uint8_t err) {
+
+    if (!err) {
+        bme_conn = bt_conn_ref(conn);
+    }
 }
 
-static void bme_disconnected(struct bt_conn *conn, uint8_t reason)
-{
-    if (bme_conn) { bt_conn_unref(bme_conn); bme_conn = NULL; }
+static void bme_disconnected(struct bt_conn *conn, uint8_t reason) {
+
+    if (bme_conn) {
+        bt_conn_unref(bme_conn);
+        bme_conn = NULL;
+    }
+
     bme_notify_enabled = false;
 }
 
@@ -55,8 +61,8 @@ static struct bt_conn_cb bme_conn_cb = {
     .disconnected = bme_disconnected,
 };
 
-static void bme_pack_and_notify(const struct bme280_msg *msg)
-{
+void bme_pack_and_notify(const struct bme280_msg *msg) {
+
     struct bt_conn *conn = bme_conn;
     if (!conn || !bme_notify_enabled) return;
 
@@ -82,13 +88,8 @@ static void bme_pack_and_notify(const struct bme280_msg *msg)
     MODALITY_NOTIFY(bme, conn, bme_notify_enabled, bme_buf, BME_BUF_LEN);
 }
 
-void bme_ble_notify_offline(const struct bme280_msg *msg)
-{
-    bme_pack_and_notify(msg);
-}
+void bme_ble_thread(void) {
 
-void bme_ble_thread(void)
-{
     bt_conn_cb_register(&bme_conn_cb);
     LOG_INF("bme_ble thread ready");
  

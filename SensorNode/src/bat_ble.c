@@ -43,15 +43,15 @@ MODALITY_CCC_CHANGED(bat, bat_notify_enabled);
 MODALITY_READ_HANDLER(bat, bat_buf, BAT_BUF_LEN);
 MODALITY_GATT_SERVICE(bat, BAT_SVC_UUID_BYTES, BAT_CHR_UUID_BYTES);
 
-static void bat_connected(struct bt_conn *conn, uint8_t err)
-{
+static void bat_connected(struct bt_conn *conn, uint8_t err){
+
     if (!err) {
         bat_conn = bt_conn_ref(conn);
     }
 }
 
-static void bat_disconnected(struct bt_conn *conn, uint8_t reason)
-{
+static void bat_disconnected(struct bt_conn *conn, uint8_t reason) {
+
     if (bat_conn) {
         bt_conn_unref(bat_conn);
         bat_conn = NULL;
@@ -64,8 +64,8 @@ static struct bt_conn_cb bat_conn_cb = {
     .disconnected = bat_disconnected,
 };
 
-static void bat_pack_and_notify(const struct batt_msg *msg)
-{
+void bat_pack_and_notify(const struct batt_msg *msg) {
+
     struct bt_conn *conn = bat_conn;
 
     if (!conn || !bat_notify_enabled) {
@@ -88,13 +88,8 @@ static void bat_pack_and_notify(const struct batt_msg *msg)
     MODALITY_NOTIFY(bat, conn, bat_notify_enabled, bat_buf, BAT_BUF_LEN);
 }
 
-void bat_ble_notify_offline(const struct batt_msg *msg)
-{
-    bat_pack_and_notify(msg);
-}
+void bat_ble_thread(void) {
 
-void bat_ble_thread(void)
-{
     bt_conn_cb_register(&bat_conn_cb);
     LOG_INF("bat_ble thread ready");
 

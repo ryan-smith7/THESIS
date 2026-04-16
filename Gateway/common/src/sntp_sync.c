@@ -58,8 +58,8 @@ static uint32_t last_utc_time   = 0;
 static uint16_t last_utc_ms     = 0;
 static uint32_t last_utc_set_ms = 0;
 
-uint32_t sntp_get_last_utc(uint16_t *out_ms)
-{
+uint32_t sntp_get_last_utc(uint16_t *out_ms) {
+    
     if (last_utc_time == 0) {
         if (out_ms) *out_ms = 0;
         return 0;
@@ -72,8 +72,8 @@ uint32_t sntp_get_last_utc(uint16_t *out_ms)
     return sec;
 }
 
-static int do_sntp_query(uint32_t *utc_out, uint16_t *ms_out)
-{
+static int do_sntp_query(uint32_t *utc_out, uint16_t *ms_out) {
+
     struct sntp_time sntp_time;
     struct sockaddr_in addr = {0};
 
@@ -119,8 +119,8 @@ static int do_sntp_query(uint32_t *utc_out, uint16_t *ms_out)
     return 0;
 }
 
-static void sntp_thread(void)
-{
+static void sntp_thread(void) {
+
     LOG_INF("SNTP sync thread started");
 
         /* Wait for network stack to fully settle after DHCP */
@@ -145,8 +145,8 @@ static void sntp_thread(void)
     }
 }
 
-void sntp_sync_start(void)
-{
+void sntp_sync_start(void) {
+
     k_thread_create(&sntp_tid,
                     sntp_stack,
                     K_THREAD_STACK_SIZEOF(sntp_stack),

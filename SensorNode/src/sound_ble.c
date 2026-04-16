@@ -125,8 +125,7 @@ static void snd_notify_cb(struct bt_conn *conn, void *user_data)
     ARG_UNUSED(user_data);
 }
 
-static void send_spectrum(const struct sound_spec_msg *spec)
-{
+void send_spectrum(const struct sound_spec_msg *spec) {
     struct bt_conn *conn = snd_conn;
     if (!snd_notify_enabled || !conn) return;
 
@@ -184,15 +183,9 @@ static void send_spectrum(const struct sound_spec_msg *spec)
     }
 }
 
-/* -- Offline replay (called from sd_drain_thread) ------------------- */
-void sound_ble_notify_offline(const struct sound_spec_msg *spec)
-{
-    send_spectrum(spec);
-}
-
 /* -- Sound BLE thread ----------------------------------------------- */
-void sound_ble_thread(void)
-{
+void sound_ble_thread(void) {
+
     bt_conn_cb_register(&snd_conn_cb);
     LOG_INF("Sound BLE thread ready -- waiting for spectrum data");
  

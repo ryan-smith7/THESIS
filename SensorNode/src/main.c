@@ -42,9 +42,9 @@
  */
 
 /* ── Shared across all nodes ─────────────────────────────────────────────── */
-K_THREAD_DEFINE(tracker_tid, TRACKER_CONTROL_STACK_SIZE, tracker_thread,
+K_THREAD_DEFINE(sensornode_tid, BLUETOOTH_CONTROL_STACK_SIZE, sensornode_thread,
                 NULL, NULL, NULL,
-                TRACKER_CONTROL_PRIORITY, 0, 0);
+                BLUETOOTH_CONTROL_PRIORITY, 0, 0);
 
 #if defined(CONFIG_SD_LOGGING)
 K_THREAD_DEFINE(sd_drain_tid, 4096, sd_drain_thread,

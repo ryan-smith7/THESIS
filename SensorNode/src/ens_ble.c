@@ -39,14 +39,19 @@ MODALITY_CCC_CHANGED(ens, ens_notify_enabled);
 MODALITY_READ_HANDLER(ens, ens_buf, ENS_BUF_LEN);
 MODALITY_GATT_SERVICE(ens, ENS_SVC_UUID_BYTES, ENS_CHR_UUID_BYTES);
 
-static void ens_connected(struct bt_conn *conn, uint8_t err)
-{
-    if (!err) ens_conn = bt_conn_ref(conn);
+static void ens_connected(struct bt_conn *conn, uint8_t err) {
+    
+    if (!err) {
+        ens_conn = bt_conn_ref(conn);
+    }
 }
 
-static void ens_disconnected(struct bt_conn *conn, uint8_t reason)
-{
-    if (ens_conn) { bt_conn_unref(ens_conn); ens_conn = NULL; }
+static void ens_disconnected(struct bt_conn *conn, uint8_t reason) {
+    
+    if (ens_conn) { 
+        bt_conn_unref(ens_conn); 
+        ens_conn = NULL; 
+    }
     ens_notify_enabled = false;
 }
 
@@ -55,8 +60,8 @@ static struct bt_conn_cb ens_conn_cb = {
     .disconnected = ens_disconnected,
 };
 
-static void ens_pack_and_notify(const struct ens160_msg *msg)
-{
+void ens_pack_and_notify(const struct ens160_msg *msg) {
+
     struct bt_conn *conn = ens_conn;
     if (!conn || !ens_notify_enabled) return;
 
@@ -78,13 +83,8 @@ static void ens_pack_and_notify(const struct ens160_msg *msg)
     MODALITY_NOTIFY(ens, conn, ens_notify_enabled, ens_buf, ENS_BUF_LEN);
 }
 
-void ens_ble_notify_offline(const struct ens160_msg *msg)
-{
-    ens_pack_and_notify(msg);
-}
+void ens_ble_thread(void) {
 
-void ens_ble_thread(void)
-{
     bt_conn_cb_register(&ens_conn_cb);
     LOG_INF("ens_ble thread ready");
  

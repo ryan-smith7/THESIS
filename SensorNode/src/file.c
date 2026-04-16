@@ -58,8 +58,7 @@ static char current_path[MAX_PATH_LEN] = SD_MOUNT_POINT;
  * /SD/foo/bar.txt  →  SD:/foo/bar.txt
  * /SD             →  SD:/
  */
-static void to_fatfs_path(const char *zpath, char *fatpath, size_t maxlen)
-{
+static void to_fatfs_path(const char *zpath, char *fatpath, size_t maxlen) {
 	if (strncmp(zpath, "/SD", 3) == 0) {
 		snprintf(fatpath, maxlen, "SD:%s", zpath + 3);
 		if (strlen(fatpath) == 3) {
@@ -74,8 +73,8 @@ static void to_fatfs_path(const char *zpath, char *fatpath, size_t maxlen)
 /**
  * @brief Append a relative segment to current_path into combined_path.
  */
-static void combine_paths(const char *relative_path, char *combined_path)
-{
+static void combine_paths(const char *relative_path, char *combined_path) {
+
 	strcpy(combined_path, current_path);
 	if (relative_path[0] == '/') {
 		strcat(combined_path, relative_path);
@@ -88,8 +87,8 @@ static void combine_paths(const char *relative_path, char *combined_path)
 /**
  * @brief Resolve a name to an absolute /SD/... path.
  */
-static void determine_path(const char *name, char *combined_path)
-{
+static void determine_path(const char *name, char *combined_path) {
+
 	if (name[0] != '/') {
 		combine_paths(name, combined_path);
 	} else {
@@ -100,8 +99,8 @@ static void determine_path(const char *name, char *combined_path)
 /**
  * @brief Move current_path up one level, never above /SD root.
  */
-static void move_up_level(void)
-{
+static void move_up_level(void) {
+
 	if (strcmp(current_path, SD_MOUNT_POINT) == 0) {
 		LOG_ERR("Already at mount root: %s", current_path);
 		return;
@@ -123,8 +122,8 @@ static void move_up_level(void)
  * MOUNT / INIT
  * ══════════════════════════════════════════════════════════════════════════ */
 
-int fatfs_mount(void)
-{
+int fatfs_mount(void) {
+
 	static const char *disk_pdrv = "SD";
 	uint64_t memory_size_mb;
 	uint32_t block_count;
@@ -164,8 +163,7 @@ int fatfs_mount(void)
  * PUBLIC FILE I/O  (raw FatFS)
  * ══════════════════════════════════════════════════════════════════════════ */
 
-int write_data_to_file(const char *fname, char *data, uint8_t trunc_or_append)
-{
+int write_data_to_file(const char *fname, char *data, uint8_t trunc_or_append) {
 	char fatpath[MAX_PATH_LEN];
 	to_fatfs_path(fname, fatpath, sizeof(fatpath));
 
@@ -194,8 +192,7 @@ int write_data_to_file(const char *fname, char *data, uint8_t trunc_or_append)
 	return 0;
 }
 
-int write_raw_to_file(const char *fname, const uint8_t *data, size_t len)
-{
+int write_raw_to_file(const char *fname, const uint8_t *data, size_t len) {
 	char fatpath[MAX_PATH_LEN];
 	to_fatfs_path(fname, fatpath, sizeof(fatpath));
 
@@ -233,8 +230,8 @@ int write_raw_to_file(const char *fname, const uint8_t *data, size_t len)
  * SHELL COMMANDS  (raw FatFS)
  * ══════════════════════════════════════════════════════════════════════════ */
 
-static int ls_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int ls_cmd(const struct shell *shell, size_t argc, char **argv) {
+
 	if (argc > 2) {
 		shell_print(shell, "Usage: ls [path]");
 		return INVALID;
@@ -277,8 +274,8 @@ static int ls_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int cd_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int cd_cmd(const struct shell *shell, size_t argc, char **argv) {
+
 	if (argc != 2) {
 		shell_print(shell, "Usage: cd <path>");
 		return INVALID;
@@ -307,8 +304,8 @@ static int cd_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int mkdir_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int mkdir_cmd(const struct shell *shell, size_t argc, char **argv) {
+
 	if (argc < 2) {
 		shell_print(shell, "Usage: mkdir <dir_name>");
 		return INVALID;
@@ -329,8 +326,8 @@ static int mkdir_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int write_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int write_cmd(const struct shell *shell, size_t argc, char **argv) {
+
 	if (argc < 3) {
 		shell_print(shell, "Usage: write <file> <data>");
 		return INVALID;
@@ -369,8 +366,8 @@ static int write_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int read_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int read_cmd(const struct shell *shell, size_t argc, char **argv) {
+
 	if (argc < 2) {
 		shell_print(shell, "Usage: read <file>");
 		return INVALID;
@@ -423,8 +420,8 @@ static int read_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int pwd_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int pwd_cmd(const struct shell *shell, size_t argc, char **argv) {
+
 	if (argc > 1) {
 		shell_print(shell, "Usage: pwd");
 		return INVALID;
@@ -433,8 +430,7 @@ static int pwd_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int remove_file_cmd(const struct shell *shell, size_t argc, char **argv)
-{
+static int remove_file_cmd(const struct shell *shell, size_t argc, char **argv) {
 	if (argc != 2) {
 		shell_print(shell, "Usage: rm <file>");
 		return INVALID;
@@ -455,31 +451,11 @@ static int remove_file_cmd(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-extern bool fatfs_readline(FIL *fil, char *buf, size_t maxlen)
-{
-	size_t i = 0;
-	UINT br;
-	char c;
-
-	while (i < maxlen - 1) {
-		if (f_read(fil, &c, 1, &br) != FR_OK || br == 0) {
-			break;
-		}
-		buf[i++] = c;
-		if (c == '\n') {
-			break;
-		}
-	}
-	buf[i] = '\0';
-	return i > 0;
-}
-
 /* ══════════════════════════════════════════════════════════════════════════
  * THREAD ENTRY POINT
  * ══════════════════════════════════════════════════════════════════════════ */
 
-void file_control_thread(void)
-{
+void file_control_thread(void) {
 	int rc = fatfs_mount();
 	if (rc < 0) {
 		LOG_ERR("Failed to mount FAT32 SD card: %d", rc);
@@ -497,7 +473,7 @@ void file_control_thread(void)
 	}
 
 	LOG_INF("FAT32 file system ready – registering shell commands");
-
+	//CURRENTLY CALLED ANYWAY IF DECLARED ANYWHERE
 	SHELL_CMD_REGISTER(ls,    NULL, "List files/dirs",         ls_cmd);
 	SHELL_CMD_REGISTER(cd,    NULL, "Change directory",        cd_cmd);
 	SHELL_CMD_REGISTER(mkdir, NULL, "Create directory",        mkdir_cmd);

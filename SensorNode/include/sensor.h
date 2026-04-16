@@ -22,16 +22,11 @@
 #define BME280_THREAD_PRIORITY 3
 #define SAMP_THREAD_PRIORITY 6
 
-#define OFF 0
-#define ON 1
-
 #if defined(CONFIG_SENSOR_NODE_1)
 #define DEVICE_ID 1
 #else
 #define DEVICE_ID 2
 #endif
-
-
 
 // sensor.h
 #pragma once
@@ -69,11 +64,38 @@ struct sensor_blk {
  * sync has occurred yet. Both fields are sent over BLE so the gateway
  * can forward millisecond-precision timestamps to Azure.
  */
-struct bme280_msg { double temp_c, rh_pct, press_hPa; uint32_t utc_sec; uint16_t utc_ms; };
-struct ens160_msg { int eco2_ppm, tvoc_ppb, aqi;       uint32_t utc_sec; uint16_t utc_ms; };
-struct as7343_msg { uint16_t ch[AS7343_NUM_CH];         uint32_t utc_sec; uint16_t utc_ms; };
-struct batt_msg   { uint16_t mV; uint8_t pct; int16_t rate_x10; uint32_t utc_sec; uint16_t utc_ms; };
-struct moisture_msg { uint16_t vwc_x100;                uint32_t utc_sec; uint16_t utc_ms; };
+struct bme280_msg {
+    double temp_c, rh_pct, press_hPa;
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+};
+
+struct ens160_msg {
+    int eco2_ppm, tvoc_ppb, aqi;
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+};
+
+struct as7343_msg {
+    uint16_t ch[AS7343_NUM_CH];
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+};
+
+struct batt_msg   {
+    uint16_t mV;
+    uint8_t pct;
+    int16_t rate_x10;
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+};
+
+struct moisture_msg {
+    uint16_t vwc_x100;
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+};
+
 struct current_msg { //CURRENT ADDITION
     int16_t  current_uA;   /* microamps signed — e.g. 1500 = 1.500 mA  */
     uint16_t voltage_mV;   /* millivolts       — e.g. 3300 = 3.300 V   */

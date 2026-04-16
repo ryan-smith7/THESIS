@@ -38,15 +38,15 @@ MODALITY_CCC_CHANGED(cur, cur_notify_enabled);
 MODALITY_READ_HANDLER(cur, cur_buf, CUR_BUF_LEN);
 MODALITY_GATT_SERVICE(cur, CUR_SVC_UUID_BYTES, CUR_CHR_UUID_BYTES);
 
-static void cur_connected(struct bt_conn *conn, uint8_t err)
-{
+static void cur_connected(struct bt_conn *conn, uint8_t err) {
+    
     if (!err) {
         cur_conn = bt_conn_ref(conn);
     }
 }
 
-static void cur_disconnected(struct bt_conn *conn, uint8_t reason)
-{
+static void cur_disconnected(struct bt_conn *conn, uint8_t reason) {
+
     if (cur_conn) {
         bt_conn_unref(cur_conn);
         cur_conn = NULL;
@@ -59,8 +59,7 @@ static struct bt_conn_cb cur_conn_cb = {
     .disconnected = cur_disconnected,
 };
 
-static void cur_pack_and_notify(const struct current_msg *msg)
-{
+void cur_pack_and_notify(const struct current_msg *msg) {
     struct bt_conn *conn = cur_conn;
 
     if (!conn || !cur_notify_enabled) {
@@ -81,17 +80,8 @@ static void cur_pack_and_notify(const struct current_msg *msg)
     MODALITY_NOTIFY(cur, conn, cur_notify_enabled, cur_buf, CUR_BUF_LEN);
 }
 
-void cur_ble_notify_offline(const struct current_msg *msg)
-{
-    if (msg->utc_sec <= SD_LOG_UTC_MIN) {
-        LOG_WRN("CUR offline: skipping record with no valid UTC");
-        return;
-    }
-    cur_pack_and_notify(msg);
-}
+void cur_ble_thread(void) {
 
-void cur_ble_thread(void)
-{
     bt_conn_cb_register(&cur_conn_cb);
     LOG_INF("cur_ble thread ready");
 

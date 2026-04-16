@@ -51,8 +51,7 @@ static const uint8_t as7343_data_lsb[18] = {
     0xB7  // DATA17_L
 };
 
-static int as7343_wait_ready(const struct device *dev)
-{
+static int as7343_wait_ready(const struct device *dev) {
     const struct as7343_config *cfg = dev->config;
     uint8_t st2;
     for (int i = 0; i < 400; i++) {             // ~2 s @ 5 ms
@@ -67,8 +66,7 @@ static int as7343_wait_ready(const struct device *dev)
 
 
 static int as7343_sample_fetch(const struct device *dev,
-                               enum sensor_channel chan)
-{
+                               enum sensor_channel chan) {
     ARG_UNUSED(chan);
     const struct as7343_config *cfg = dev->config;
     struct as7343_data *data = dev->data;
@@ -104,8 +102,7 @@ static int as7343_sample_fetch(const struct device *dev,
 
 static int as7343_channel_get(const struct device *dev,
                               enum sensor_channel chan,
-                              struct sensor_value *val)
-{
+                              struct sensor_value *val) {
     struct as7343_data *data = dev->data;
 
     if (chan >= SENSOR_CHAN_PRIV_START) {
@@ -128,11 +125,13 @@ static const struct sensor_driver_api as7343_driver_api = {
 /* Spectrum helper                                                            */
 
 int as7343_get_spectrum(const struct device *dev,
-                        struct as7343_point spectrum[AS7343_NUM_CHANNELS])
-{
+                        struct as7343_point spectrum[AS7343_NUM_CHANNELS]) {
     struct as7343_data *data = dev->data;
     int ret = as7343_sample_fetch(dev, SENSOR_CHAN_ALL);
-    if (ret < 0) return ret;
+    
+    if (ret < 0) {
+        return ret;
+    }
 
     for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
         spectrum[i].wavelength_nm = data->wavelengths[i];
@@ -141,8 +140,8 @@ int as7343_get_spectrum(const struct device *dev,
     return 0;
 }
 
-static int as7343_init(const struct device *dev)
-{
+static int as7343_init(const struct device *dev) {
+
     const struct as7343_config *cfg = dev->config;
     int ret;
 
@@ -153,35 +152,52 @@ static int as7343_init(const struct device *dev)
 
     /* Step 1: Power ON only */
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x80, 0x01);
-    if (ret < 0) return ret;
-
+    if (ret < 0) {
+        return ret;
+    }
     /* Step 2: ATIME, ASTEP, AGAIN */
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x81, 0x00); // ATIME
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xD4, 0xE7); // ASTEP LSB
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xD5, 0x03); // ASTEP MSB
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xC6, 0x2A); // AGAIN=128x
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     /* Step 3: Switch to bank 1 */
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xBF, 0x01);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     /* Step 4: Set CFG20 for autorun=3 (18 channels) */
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xD6, 0x60);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     /* Step 5: Back to bank 0 */
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xBF, 0x00);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x80, 0x11);
     k_msleep(5); // wait for SMUXEN bit to auto-clear
     /* Step 6: Enable ALS (PON+ALS_EN) */
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x80, 0x03);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     LOG_INF("AS7343 init: 18-channel autorun, ATIME=0, ASTEP=999, GAIN=128x");
     return 0;

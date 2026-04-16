@@ -62,6 +62,6 @@ extern void sound_ble_thread(void);
  * @brief Replay a buffered spectrum from SD drain thread.
  *        Calls send_spectrum() directly — conn/notify_enabled must be valid.
  */
-extern void sound_ble_notify_offline(const struct sound_spec_msg *spec);
+extern void send_spectrum(const struct sound_spec_msg *spec);
 
 #endif /* SOUND_BLE_H */

@@ -936,8 +936,8 @@ static float   s_bin_accum[FFT_SIZE / 2];
 static uint8_t s_tx_silence[BUF_SIZE];   /* BSS zero — primes TX once */
 
 /* ── DC blocking filter ─────────────────────────────────── */
-static float dc_block(float x)
-{
+static float dc_block(float x) {
+
     static float x1 = 0.0f, y1 = 0.0f;
     float y = x - x1 + 0.9975f * y1;
     x1 = x; y1 = y;
@@ -960,8 +960,8 @@ static uint8_t g_pcm_shift  = 14;
 static double  g_full_scale = 131072.0;
 static uint8_t g_mic_slot   = MIC_SLOT;  /* 0=left or 1=right, detected at runtime */
 
-static inline int32_t extract_pcm(uint32_t raw)
-{
+static inline int32_t extract_pcm(uint32_t raw) {
+
     return (int32_t)raw >> g_pcm_shift;
 }
 
@@ -984,8 +984,7 @@ static inline int32_t extract_pcm(uint32_t raw)
  *
  * Returns true if locked, false if caller should retry.
  */
-static bool detect_and_set_shift(const struct device *i2s_rx)
-{
+static bool detect_and_set_shift(const struct device *i2s_rx) {
     void    *mem;
     uint32_t sz;
 
@@ -1057,8 +1056,8 @@ static bool detect_and_set_shift(const struct device *i2s_rx)
 }
 
 /* ── Hann window ────────────────────────────────────────── */
-static void init_hann(void)
-{
+static void init_hann(void) {
+
     for (uint32_t i = 0; i < FFT_SIZE; i++) {
         s_hann[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i
                                          / (float)(FFT_SIZE - 1)));
@@ -1066,8 +1065,8 @@ static void init_hann(void)
 }
 
 /* ── Cooley-Tukey FFT ───────────────────────────────────── */
-static void fft_compute(void)
-{
+static void fft_compute(void) {
+
     uint32_t n = FFT_SIZE;
     uint32_t j = 0;
 
@@ -1104,8 +1103,7 @@ static void fft_compute(void)
 }
 
 /* ── Publish both queues ────────────────────────────────── */
-static void publish(double avg_dbfs, float peak_freq, float peak_mag)
-{
+static void publish(double avg_dbfs, float peak_freq, float peak_mag) {
     /* 1. Compact summary → sound_q */
     struct sound_msg summary = {
         .rms_dbfs_x100 = (int16_t)(avg_dbfs  * 100.0),
@@ -1141,8 +1139,7 @@ static void publish(double avg_dbfs, float peak_freq, float peak_mag)
 
 /* ── Process one window ─────────────────────────────────── */
 static void process_window(uint32_t *frames, size_t num_frames,
-                           double *rms_accum, uint32_t *accum_count)
-{
+                           double *rms_accum, uint32_t *accum_count) {
     /* ── Diagnostic: print raw word + PCM range once per averaging window ── */
     if (*accum_count == 0) {
         int32_t mn = INT32_MAX, mx = INT32_MIN;
@@ -1217,8 +1214,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
 }
 
 /* ── Sound thread ───────────────────────────────────────── */
-void sound_thread(void)
-{
+void sound_thread(void) {
     const struct device *i2s_rx = DEVICE_DT_GET(I2S_RX_NODE);
     const struct device *i2s_tx = DEVICE_DT_GET(I2S_TX_NODE);
 

@@ -1,9 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * current_thread.c — dummy implementation for the electrical student
+ * current_thread.c — with dummy implementation
  *
- * The student replaces dummy_read_current_uA() and dummy_read_voltage_mV()
- * with their actual ADC/INA219/shunt resistor reads. Everything else
- * (queue, thread structure) stays identical to moisture_thread.
+ * Replace dummy_read_current_uA() and dummy_read_voltage_mV()
+ * with their actual reads. Everything else
+ * (queue, thread structure) stays identical
  * ═══════════════════════════════════════════════════════════════════════════
  */
  
@@ -18,24 +18,17 @@ LOG_MODULE_REGISTER(current_sensor, LOG_LEVEL_INF);
 #define CURRENT_Q_DEPTH     8
 #define CURRENT_STACK_SIZE  2048
 #define CURRENT_PRIORITY    6
-#define SAMPLE_PERIOD_MS    1000   /* 1 Hz — adjust as needed */
+#define SAMPLE_PERIOD_MS    1000 //Need to increase sampling (next thing to do)
  
 K_MSGQ_DEFINE(current_q, sizeof(struct current_msg), CURRENT_Q_DEPTH, 4);
  
-/* ── Dummy sensor reads — REPLACE THESE ─────────────────────────────────── */
 /*
- * Student: replace these two functions with your actual sensor reads.
+ * Replace these two functions with your actual sensor reads.
  * Return values:
- *   current_uA — signed microamps (negative = reverse current)
- *   voltage_mV — unsigned millivolts across the measurement point
- *
- * Examples of what might go here:
- *   - INA219 I2C current sensor read
- *   - Shunt resistor ADC read + Ohm's law calculation
- *   - ACS712 hall effect sensor ADC read
+ *   current_uA
+ *   voltage_mV
  */
-static int16_t dummy_read_current_uA(void)
-{
+static int16_t dummy_read_current_uA(void) {
     /* Placeholder: simple triangle wave between -5000 uA and +5000 uA */
     static int32_t t = 0;
     t += 100;
@@ -47,23 +40,20 @@ static int16_t dummy_read_current_uA(void)
     }
 }
  
-static uint16_t dummy_read_voltage_mV(void)
-{
+static uint16_t dummy_read_voltage_mV(void) {
     /* Placeholder: returns 3300 mV (3.3V rail) */
     return 3300;
 }
  
-/* ── Thread ──────────────────────────────────────────────────────────────── */
-void current_thread(void)
-{
+void current_thread(void) {
     LOG_INF("Current sensor thread ready");
  
     while (1) {
-        /* ── READ SENSOR — replace dummy calls with real reads ── */
+        // READ SENSOR — replace dummy calls with real reads
         int16_t  current_uA = dummy_read_current_uA();
         uint16_t voltage_mV = dummy_read_voltage_mV();
  
-        /* ── STAMP UTC AT MEASUREMENT MOMENT ── */
+        // STAMP UTC AT MEASUREMENT MOMENT
         uint16_t utc_ms;
         uint32_t utc_sec = time_sync_get_utc_ms(&utc_ms);
  
@@ -82,9 +72,10 @@ void current_thread(void)
                m.utc_ms);
  
         if (k_msgq_put(&current_q, &m, K_NO_WAIT) != 0) {
+            // if queue is full
             struct current_msg dump;
-            (void)k_msgq_get(&current_q, &dump, K_NO_WAIT);
-            (void)k_msgq_put(&current_q, &m, K_NO_WAIT);
+            (void)k_msgq_get(&current_q, &dump, K_NO_WAIT); //dequeue oldest message
+            (void)k_msgq_put(&current_q, &m, K_NO_WAIT); // enqueue new message
         }
  
         k_msleep(SAMPLE_PERIOD_MS);

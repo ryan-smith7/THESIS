@@ -8,6 +8,6 @@
 
 extern void ens_ble_thread(void);
 
-extern void ens_ble_notify_offline(const struct ens160_msg *msg);
+extern void ens_pack_and_notify(const struct ens160_msg *msg);
 
 #endif /* ENS_BLE_H */

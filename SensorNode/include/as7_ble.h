@@ -8,6 +8,6 @@
 
 extern void as7_ble_thread(void);
 
-extern void as7_ble_notify_offline(const struct as7343_msg *msg);
+extern void as7_pack_and_notify(const struct as7343_msg *msg);
 
 #endif /* AS7_BLE_H */

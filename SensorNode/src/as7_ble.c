@@ -42,9 +42,13 @@ static void as7_connected(struct bt_conn *conn, uint8_t err)
     if (!err) as7_conn = bt_conn_ref(conn);
 }
 
-static void as7_disconnected(struct bt_conn *conn, uint8_t reason)
-{
-    if (as7_conn) { bt_conn_unref(as7_conn); as7_conn = NULL; }
+static void as7_disconnected(struct bt_conn *conn, uint8_t reason) {
+
+    if (as7_conn) {
+        bt_conn_unref(as7_conn);
+        as7_conn = NULL;
+    }
+    
     as7_notify_enabled = false;
 }
 
@@ -53,8 +57,8 @@ static struct bt_conn_cb as7_conn_cb = {
     .disconnected = as7_disconnected,
 };
 
-static void as7_pack_and_notify(const struct as7343_msg *msg)
-{
+void as7_pack_and_notify(const struct as7343_msg *msg) {
+
     struct bt_conn *conn = as7_conn;
     if (!conn || !as7_notify_enabled) return;
 
@@ -73,13 +77,7 @@ static void as7_pack_and_notify(const struct as7343_msg *msg)
     MODALITY_NOTIFY(as7, conn, as7_notify_enabled, as7_buf, AS7_BUF_LEN);
 }
 
-void as7_ble_notify_offline(const struct as7343_msg *msg)
-{
-    as7_pack_and_notify(msg);
-}
-
-void as7_ble_thread(void)
-{
+void as7_ble_thread(void) {
     bt_conn_cb_register(&as7_conn_cb);
     LOG_INF("as7_ble thread ready");
  

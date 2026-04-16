@@ -14,7 +14,7 @@
 
 #include "cur_ble.h"
 #include "modality_ble.h"
-#include "time_sync.h"
+#include "sd_log.h"
 
 LOG_MODULE_REGISTER(cur_ble, LOG_LEVEL_INF);
 
@@ -38,13 +38,15 @@ MODALITY_CCC_CHANGED(cur, cur_notify_enabled);
 MODALITY_READ_HANDLER(cur, cur_buf, CUR_BUF_LEN);
 MODALITY_GATT_SERVICE(cur, CUR_SVC_UUID_BYTES, CUR_CHR_UUID_BYTES);
 
-static void cur_connected(struct bt_conn *conn, uint8_t err) {
+static void cur_connected(struct bt_conn *conn, uint8_t err)
+{
     if (!err) {
         cur_conn = bt_conn_ref(conn);
     }
 }
 
 static void cur_disconnected(struct bt_conn *conn, uint8_t reason) {
+    
     if (cur_conn) {
         bt_conn_unref(cur_conn);
         cur_conn = NULL;
@@ -57,7 +59,7 @@ static struct bt_conn_cb cur_conn_cb = {
     .disconnected = cur_disconnected,
 };
 
-static void cur_pack_and_notify(const struct current_msg *msg) {
+void cur_pack_and_notify(const struct current_msg *msg) {
     struct bt_conn *conn = cur_conn;
 
     if (!conn || !cur_notify_enabled) {
@@ -79,6 +81,7 @@ static void cur_pack_and_notify(const struct current_msg *msg) {
 }
 
 void cur_ble_thread(void) {
+
     bt_conn_cb_register(&cur_conn_cb);
     LOG_INF("cur_ble thread ready");
 

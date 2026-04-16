@@ -65,24 +65,22 @@ static struct as7343_msg   as7_drain_rows[MAX_DRAIN_ROWS];
 static struct moisture_msg mst_drain_rows[MAX_DRAIN_ROWS];
 #endif
 
-bool sd_log_is_ready(void)
-{
+bool sd_log_is_ready(void) {
+    
     return sd_ready;
 }
 
-bool sd_log_is_draining(void)
-{
+bool sd_log_is_draining(void) {
     return sd_draining;
 }
 
-void sd_log_set_draining(bool draining)
-{
+void sd_log_set_draining(bool draining) {
+
     sd_draining = draining;
 }
 
 /* ── Path conversion ─────────────────────────────────────────────────────── */
-static void zpath_to_fatfs(const char *zpath, char *out, size_t outlen)
-{
+static void zpath_to_fatfs(const char *zpath, char *out, size_t outlen) {
     if (strncmp(zpath, "/SD", 3) == 0) {
         snprintf(out, outlen, "SD:%s", zpath + 3);
         if (strlen(out) == 3) {
@@ -100,8 +98,7 @@ static void zpath_to_fatfs(const char *zpath, char *out, size_t outlen)
  * writes it back, and returns the new value.
  * Returns 0 if the file cannot be read/written (SD error).
  */
-static uint32_t read_and_increment_boot_count(void)
-{
+static uint32_t read_and_increment_boot_count(void) {
     char fatpath[MAX_PATH_LEN];
     char buf[16];
     uint32_t count = 0;
@@ -135,8 +132,7 @@ static uint32_t read_and_increment_boot_count(void)
 }
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
-int sd_log_init(void)
-{
+int sd_log_init(void) {
     int rc = fatfs_mount();
     if (rc < 0) {
         LOG_ERR("SD log: mount failed (%d)", rc);
@@ -150,17 +146,12 @@ int sd_log_init(void)
 
 
 #if defined(CONFIG_SENSOR_NODE_1)
-    // snprintf(upt_bme, sizeof(upt_bme), "/SD/bme280_upt_%04u.bin",  (unsigned)boot);
-    // snprintf(upt_ens, sizeof(upt_ens), "/SD/ens160_upt_%04u.bin",  (unsigned)boot);
-    // snprintf(upt_snd, sizeof(upt_snd), "/SD/sound_upt_%04u.bin",   (unsigned)boot);
     snprintf(upt_bme, sizeof(upt_bme), "/SD/BME%04u.BIN", (unsigned)boot);
     snprintf(upt_ens, sizeof(upt_ens), "/SD/ENS%04u.BIN", (unsigned)boot);
     snprintf(upt_snd, sizeof(upt_snd), "/SD/SND%04u.BIN", (unsigned)boot);
 #elif defined(CONFIG_SENSOR_NODE_2)
     snprintf(upt_as7, sizeof(upt_as7), "/SD/AS7%04u.BIN", (unsigned)boot);
     snprintf(upt_mst, sizeof(upt_mst), "/SD/MST%04u.BIN", (unsigned)boot);
-    // snprintf(upt_as7, sizeof(upt_as7), "/SD/as7343_upt_%04u.bin",  (unsigned)boot);
-    // snprintf(upt_mst, sizeof(upt_mst), "/SD/moisture_upt_%04u.bin",(unsigned)boot);
 #endif
 
     LOG_INF("SD log: ready");
@@ -173,8 +164,7 @@ int sd_log_init(void)
 
 #if defined(CONFIG_SENSOR_NODE_1)
 
-void sd_log_bme(const struct bme280_msg *msg)
-{
+void sd_log_bme(const struct bme280_msg *msg) {
     const char *path;
 
     if (!sd_ready) {
@@ -192,8 +182,7 @@ void sd_log_bme(const struct bme280_msg *msg)
     k_mutex_unlock(&sd_mutex);
 }
 
-void sd_log_ens(const struct ens160_msg *msg)
-{
+void sd_log_ens(const struct ens160_msg *msg) {
     const char *path;
 
     if (!sd_ready) {
@@ -211,8 +200,7 @@ void sd_log_ens(const struct ens160_msg *msg)
     k_mutex_unlock(&sd_mutex);
 }
 
-void sd_log_snd(const struct sound_spec_msg *spec)
-{
+void sd_log_snd(const struct sound_spec_msg *spec) {
     const char *path;
 
     if (!sd_ready) {
@@ -232,8 +220,7 @@ void sd_log_snd(const struct sound_spec_msg *spec)
 
 #elif defined(CONFIG_SENSOR_NODE_2)
 
-void sd_log_as7(const struct as7343_msg *msg)
-{
+void sd_log_as7(const struct as7343_msg *msg) {
     const char *path;
 
     if (!sd_ready) {
@@ -251,8 +238,7 @@ void sd_log_as7(const struct as7343_msg *msg)
     k_mutex_unlock(&sd_mutex);
 }
 
-void sd_log_mst(const struct moisture_msg *msg)
-{
+void sd_log_mst(const struct moisture_msg *msg) {
     const char *path;
 
     if (!sd_ready) {
@@ -278,8 +264,8 @@ void sd_log_mst(const struct moisture_msg *msg)
 
 #if defined(CONFIG_SENSOR_NODE_1)
 
-static void drain_bme(void)
-{
+static void drain_bme(void) {
+
     char fatpath[MAX_PATH_LEN];
     int count = 0;
 
@@ -316,14 +302,13 @@ static void drain_bme(void)
     k_mutex_unlock(&sd_mutex);
 
     for (int i = 0; i < count; i++) {
-        bme_ble_notify_offline(&bme_drain_rows[i]);
+        bme_pack_and_notify(&bme_drain_rows[i]);
     }
 
     LOG_INF("SD drain BME: %d UTC records replayed", count);
 }
 
-static void drain_ens(void)
-{
+static void drain_ens(void) {
     char fatpath[MAX_PATH_LEN];
     int count = 0;
 
@@ -360,14 +345,13 @@ static void drain_ens(void)
     k_mutex_unlock(&sd_mutex);
 
     for (int i = 0; i < count; i++) {
-        ens_ble_notify_offline(&ens_drain_rows[i]);
+        ens_pack_and_notify(&ens_drain_rows[i]);
     }
 
     LOG_INF("SD drain ENS: %d UTC records replayed", count);
 }
 
-static void drain_snd(void)
-{
+static void drain_snd(void) {
     char fatpath[MAX_PATH_LEN];
     int count = 0;
 
@@ -404,7 +388,7 @@ static void drain_snd(void)
     k_mutex_unlock(&sd_mutex);
 
     for (int i = 0; i < count; i++) {
-        sound_ble_notify_offline(&snd_drain_rows[i]);
+        send_spectrum(&snd_drain_rows[i]);
         k_sleep(K_MSEC(100));
     }
 
@@ -413,8 +397,7 @@ static void drain_snd(void)
 
 #elif defined(CONFIG_SENSOR_NODE_2)
 
-static void drain_as7(void)
-{
+static void drain_as7(void) {
     char fatpath[MAX_PATH_LEN];
     int count = 0;
 
@@ -451,14 +434,13 @@ static void drain_as7(void)
     k_mutex_unlock(&sd_mutex);
 
     for (int i = 0; i < count; i++) {
-        as7_ble_notify_offline(&as7_drain_rows[i]);
+        as7_pack_and_notify(&as7_drain_rows[i]);
     }
 
     LOG_INF("SD drain AS7: %d UTC records replayed", count);
 }
 
-static void drain_mst(void)
-{
+static void drain_mst(void) {
     char fatpath[MAX_PATH_LEN];
     int count = 0;
 
@@ -495,7 +477,7 @@ static void drain_mst(void)
     k_mutex_unlock(&sd_mutex);
 
     for (int i = 0; i < count; i++) {
-        mst_ble_notify_offline(&mst_drain_rows[i]);
+        mst_pack_and_notify(&mst_drain_rows[i]);
     }
 
     LOG_INF("SD drain MST: %d UTC records replayed", count);
@@ -507,8 +489,7 @@ static void drain_mst(void)
  * DRAIN THREAD
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-void sd_drain_thread(void)
-{
+void sd_drain_thread(void) {
     sd_log_init();
     LOG_INF("SD drain thread ready");
 

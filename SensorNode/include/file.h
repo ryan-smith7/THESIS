@@ -65,7 +65,7 @@ extern int write_data_to_file(const char *fname, char *data,
 /**
  * @brief Write raw binary data (append) to a file on the SD card.
  *
- * Unlike write_data_to_file, uses explicit length rather than strlen
+ * Uses explicit length rather than strlen
  * so binary data containing null bytes is handled correctly.
  *
  * @param fname  Absolute or relative file path.
@@ -75,16 +75,6 @@ extern int write_data_to_file(const char *fname, char *data,
  */
 extern int write_raw_to_file(const char *fname, const uint8_t *data,
                               size_t len);
-
-/**
- * @brief Read one line from a FatFS file into buf.
- *
- * Reads byte-by-byte until newline, EOF, or buffer full.
- * Always null-terminates buf.
- *
- * @return true if at least one byte was read, false on EOF.
- */
-extern bool fatfs_readline(FIL *fil, char *buf, size_t maxlen);
 
 /**
  * @brief Thread entry - mounts the SD card and registers shell commands.

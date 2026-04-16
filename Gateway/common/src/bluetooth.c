@@ -167,20 +167,20 @@ static void discover_done(struct bt_conn *conn, int index);
  * Helpers
  * ═══════════════════════════════════════════════════════════ */
 
-static int get_conn_index(struct bt_conn *conn)
-{
+static int get_conn_index(struct bt_conn *conn) {
     for (int i = 0; i < MAX_CONN; i++) {
         if (conns[i] == conn) return i;
     }
     return INVALID;
 }
 
-static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid)
-{
+static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid) {
     size_t offset = 0;
     while (offset < ad->len) {
         uint8_t len  = ad->data[offset];
-        if (len == 0 || (offset + len) >= ad->len) break;
+        if (len == 0 || (offset + len) >= ad->len) {
+            break;
+        }
         uint8_t type = ad->data[offset + 1];
         const uint8_t *data = &ad->data[offset + 2];
         uint8_t data_len = len - 1;
@@ -189,7 +189,9 @@ static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid)
                 struct bt_uuid_128 adv_uuid;
                 memcpy(adv_uuid.val, &data[i], 16);
                 adv_uuid.uuid.type = BT_UUID_TYPE_128;
-                if (!bt_uuid_cmp(uuid, &adv_uuid.uuid)) return true;
+                if (!bt_uuid_cmp(uuid, &adv_uuid.uuid)) {
+                    return true;
+                }
             }
         }
         offset += len + 1;
@@ -198,21 +200,24 @@ static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid)
 }
 
 /* ── Big-endian decode helpers ──────────────────────────── */
-static inline uint32_t be32(const uint8_t *b)
-{
+static inline uint32_t be32(const uint8_t *b) {
+
     return ((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|
            ((uint32_t)b[2]<<8)| (uint32_t)b[3];
 }
-static inline uint16_t be16(const uint8_t *b)
-{
+
+static inline uint16_t be16(const uint8_t *b) {
+
     return ((uint16_t)b[0] << 8) | b[1];
 }
-static inline int16_t be16s(const uint8_t *b)
-{
+
+static inline int16_t be16s(const uint8_t *b) {
+
     return (int16_t)(((uint16_t)b[0] << 8) | b[1]);
 }
-static inline int32_t be32s(const uint8_t *b)
-{
+
+static inline int32_t be32s(const uint8_t *b) {
+
     return (int32_t)(((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|
                      ((uint32_t)b[2]<<8)| (uint32_t)b[3]);
 }
@@ -228,11 +233,17 @@ static inline int32_t be32s(const uint8_t *b)
 /* ── BME280 (12 bytes: uptime(4) + temp(2) + rh(2) + press(4)) ──────── */
 static uint8_t bme_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
-    if (!data || length != BME_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+                                const void *data, uint16_t length) {
+
+    if (!data || length != BME_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+
     int idx = get_conn_index(conn);
-    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
 
     const uint8_t *d = data;
     env_acc[idx].utc_sec          = be32(d + 0);
@@ -255,11 +266,17 @@ static uint8_t bme_notify_func(struct bt_conn *conn,
 /* ── ENS160 (9 bytes: uptime(4) + eco2(2) + tvoc(2) + aqi(1)) ───────── */
 static uint8_t ens_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
-    if (!data || length != ENS_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+                                const void *data, uint16_t length) {
+
+    if (!data || length != ENS_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+
     int idx = get_conn_index(conn);
-    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
 
     const uint8_t *d = data;
     /* Use ENS utc_sec only if BME hasn't arrived yet */
@@ -284,11 +301,17 @@ static uint8_t ens_notify_func(struct bt_conn *conn,
 /* ── AS7343 (30 bytes: uptime(4) + 13×uint16(26)) ────────────────────── */
 static uint8_t as7_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
-    if (!data || length != AS7_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+                                const void *data, uint16_t length) {
+
+    if (!data || length != AS7_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+
     int idx = get_conn_index(conn);
-    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
 
     const uint8_t *d = data;
     mod_spec_t msg;
@@ -308,11 +331,14 @@ static uint8_t as7_notify_func(struct bt_conn *conn,
 /* ── Moisture (6 bytes: uptime(4) + vwc(2)) ──────────────────────────── */
 static uint8_t mst_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
-    if (!data || length != MST_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+                                const void *data, uint16_t length) {
+    if (!data || length != MST_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
     int idx = get_conn_index(conn);
-    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
 
     const uint8_t *d = data;
     mod_mst_t msg;
@@ -330,11 +356,14 @@ static uint8_t mst_notify_func(struct bt_conn *conn,
 /* ── Battery (9 bytes: uptime(4) + mV(2) + pct(1) + rate(2)) ────────── */
 static uint8_t bat_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
-    if (!data || length != BAT_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+                                const void *data, uint16_t length) {
+    if (!data || length != BAT_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
     int idx = get_conn_index(conn);
-    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
  
     const uint8_t *d = data;
     mod_bat_t msg;
@@ -354,11 +383,15 @@ static uint8_t bat_notify_func(struct bt_conn *conn,
 /* ── Current sensor (10 bytes: utc_sec(4)+utc_ms(2)+current_uA(2)+voltage_mV(2)) ── */
 static uint8_t cur_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
-    if (!data || length != CUR_PAYLOAD_LEN) return BT_GATT_ITER_CONTINUE;
+                                const void *data, uint16_t length) {
+    if (!data || length != CUR_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+
     int idx = get_conn_index(conn);
-    if (idx < 0) return BT_GATT_ITER_CONTINUE;
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
  
     const uint8_t *d = data;
     mod_cur_t msg;
@@ -377,11 +410,14 @@ static uint8_t cur_notify_func(struct bt_conn *conn,
 /* ── Sound spectrum (existing reassembly — unchanged) ────────────────── */
 static uint8_t sound_notify_func(struct bt_conn *conn,
                                   struct bt_gatt_subscribe_params *params,
-                                  const void *data, uint16_t length)
-{
-    if (!data || length < SOUND_HDR_SIZE) return BT_GATT_ITER_CONTINUE;
+                                  const void *data, uint16_t length) {
+    if (!data || length < SOUND_HDR_SIZE) {
+        return BT_GATT_ITER_CONTINUE;
+    }
     int index = get_conn_index(conn);
-    if (index < 0) return BT_GATT_ITER_CONTINUE;
+    if (index < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
 
     const uint8_t *buf = (const uint8_t *)data;
     uint8_t  pkt_id  = buf[0];
@@ -399,7 +435,9 @@ static uint8_t sound_notify_func(struct bt_conn *conn,
         rx->utc_sec = utc_sec;
         rx->utc_ms  = utc_ms;
     }
-    if (rx->received & (1u << pkt_id)) return BT_GATT_ITER_CONTINUE;
+    if (rx->received & (1u << pkt_id)) {
+        return BT_GATT_ITER_CONTINUE;
+    }
 
     uint32_t bin_start     = pkt_id * SOUND_BINS_PER_PKT;
     const uint8_t *payload = buf + SOUND_HDR_SIZE;
@@ -495,8 +533,8 @@ static void discover_##name##_char(struct bt_conn *conn, int index)          \
 /* ── Sensor (chains to sound, no notify — time sync write target only) ── */
 static uint8_t sensor_cccd_disc_func(struct bt_conn *conn,
                                       const struct bt_gatt_attr *attr,
-                                      struct bt_gatt_discover_params *params)
-{
+                                      struct bt_gatt_discover_params *params) {
+
     int index = get_conn_index(conn);
     if (!attr) {
         LOG_ERR("[SENSOR %d] CCCD not found", index);
@@ -515,10 +553,12 @@ static uint8_t sensor_cccd_disc_func(struct bt_conn *conn,
 
 static uint8_t sensor_disc_func(struct bt_conn *conn,
                                  const struct bt_gatt_attr *attr,
-                                 struct bt_gatt_discover_params *params)
-{
+                                 struct bt_gatt_discover_params *params) {
+
     int index = get_conn_index(conn);
-    if (!attr) { return BT_GATT_ITER_STOP; }
+    if (!attr) {
+        return BT_GATT_ITER_STOP;
+    }
     const struct bt_gatt_chrc *chrc = attr->user_data;
     sensor_char_handles[index] = chrc->value_handle;
     sensor_cccd_disc[index].uuid         = &cccd_uuid.uuid;
@@ -530,19 +570,21 @@ static uint8_t sensor_disc_func(struct bt_conn *conn,
     return BT_GATT_ITER_STOP;
 }
 
-static void discover_sensor_char(struct bt_conn *conn, int index)
-{
+static void discover_sensor_char(struct bt_conn *conn, int index) {
+
     sensor_disc[index].uuid         = &tracker_char_uuid.uuid;
     sensor_disc[index].func         = sensor_disc_func;
     sensor_disc[index].start_handle = 0x0001;
     sensor_disc[index].end_handle   = 0xffff;
     sensor_disc[index].type         = BT_GATT_DISCOVER_CHARACTERISTIC;
     int err = bt_gatt_discover(conn, &sensor_disc[index]);
-    if (err) LOG_ERR("[SENSOR %d] discover failed (%d)", index, err);
+    if (err) {
+        LOG_ERR("[SENSOR %d] discover failed (%d)", index, err);
+    }
 }
 
-static void discover_done(struct bt_conn *conn, int index)
-{
+static void discover_done(struct bt_conn *conn, int index) {
+
     LOG_INF("[BASE %d] Discovery chain complete", index);
 }
 
@@ -559,8 +601,7 @@ MODALITY_DISC_FUNCS(cur,   discover_done,      cur_notify_func)
  * Scan and connection management
  * ═══════════════════════════════════════════════════════════ */
 
-static void start_scan(void)
-{
+static void start_scan(void) {
     struct bt_le_scan_param scan_params = {
         .type     = BT_HCI_LE_SCAN_PASSIVE,
         .options  = BT_LE_SCAN_OPT_NONE,
@@ -568,29 +609,40 @@ static void start_scan(void)
         .window   = BT_GAP_SCAN_FAST_WINDOW,
     };
     int err = bt_le_scan_start(&scan_params, device_found);
-    if (err) LOG_ERR("[BASE] Scan failed (%d)", err);
-    else     LOG_INF("[BASE] Scanning...");
+    if (err) {
+        LOG_ERR("[BASE] Scan failed (%d)", err);
+    } else {
+        LOG_INF("[BASE] Scanning...");
+    }
 }
 
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
-                          struct net_buf_simple *ad)
-{
+                          struct net_buf_simple *ad) {
     if (!azure_mqtt_is_connected()) {
         return;  /* ignore advertisements until MQTT is back */
     }
     
     if (type != BT_GAP_ADV_TYPE_ADV_IND &&
-        type != BT_GAP_ADV_TYPE_ADV_DIRECT_IND) return;
-    if (!is_uuid_in_ad(ad, &tracker_service_uuid.uuid)) return;
+        type != BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
+            return;
+    }
+    if (!is_uuid_in_ad(ad, &tracker_service_uuid.uuid)) {
+        return;
+    }
 
     struct bt_conn *existing = bt_conn_lookup_addr_le(BT_ID_DEFAULT, addr);
     if (existing) { bt_conn_unref(existing); return; }
 
     int slot = -1;
     for (int i = 0; i < MAX_CONN; i++) {
-        if (!conns[i]) { slot = i; break; }
+        if (!conns[i]) {
+            slot = i;
+            break;
+        }
     }
-    if (slot < 0) return;
+    if (slot < 0) {
+        return;
+    }
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
@@ -599,20 +651,24 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     bt_le_scan_stop();
     int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
                                 BT_LE_CONN_PARAM_DEFAULT, &conns[slot]);
-    if (err) { LOG_ERR("[BASE] Connect failed (%d)", err); start_scan(); }
+    if (err) {
+        LOG_ERR("[BASE] Connect failed (%d)", err);
+        start_scan();
+    }
 }
 
 static struct bt_gatt_exchange_params mtu_params[MAX_CONN];
 
 static void exchange_func(struct bt_conn *conn, uint8_t err,
-                           struct bt_gatt_exchange_params *params)
-{
-    if (err) LOG_ERR("MTU exchange failed (%u)", err);
-    else     LOG_INF("MTU: %d bytes", bt_gatt_get_mtu(conn));
+                           struct bt_gatt_exchange_params *params) {
+    if (err) { 
+        LOG_ERR("MTU exchange failed (%u)", err);
+    } else {
+        LOG_INF("MTU: %d bytes", bt_gatt_get_mtu(conn));
+    }
 }
 
-static void connected(struct bt_conn *conn, uint8_t err)
-{
+static void connected(struct bt_conn *conn, uint8_t err) {
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
@@ -653,8 +709,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
     start_scan();
 }
 
-static void disconnected(struct bt_conn *conn, uint8_t reason)
-{
+static void disconnected(struct bt_conn *conn, uint8_t reason) {
+
     int index = get_conn_index(conn);
     LOG_INF("[BASE] Disconnected [%d] (reason 0x%02x)", index, reason);
     if (index >= 0) {
@@ -711,8 +767,7 @@ static char s_cur_json[JSON_CUR_BUF_SIZE];
 
 static uint8_t sound_throttle = 0;
 
-void process_data_thread(void)
-{
+void process_data_thread(void) {
     uint32_t last_timesync_ms = 0;
 
     while (1) {
@@ -733,8 +788,7 @@ void process_data_thread(void)
         /* ── Periodic time sync ───────────────────────────── */
         uint32_t now = k_uptime_get_32();
         if ((now - last_timesync_ms) >= (TIMESYNC_INTERVAL_S * 1000U)
-            && time_sync_writer_has_utc())
-        {
+            && time_sync_writer_has_utc()) {
             for (int i = 0; i < MAX_CONN; i++) {
                 if (conns[i] && sensor_char_handles[i] != 0) {
                     time_sync_writer_send(conns[i], i, sensor_char_handles[i]);
@@ -793,7 +847,7 @@ void process_data_thread(void)
             }
         }
 
-        /* ── Sound spectrum (throttled 1:10) ─────────────── */
+        /* ── Sound spectrum (throttled 1:10) ─────────────── */ //CHANGE THE THROTTLE!!!!!
         struct sound_queue_pkt_t sqpkt;
         if (k_msgq_get(&sound_msgq, &sqpkt, K_MSEC(5)) == 0) {
             if (++sound_throttle >= 10) {
@@ -822,8 +876,7 @@ void process_data_thread(void)
     }
 }
 
-void base_thread(void)
-{
+void base_thread(void) {
     int err = bt_enable(NULL);
     if (err) {
         LOG_ERR("[BASE] Bluetooth init failed (err %d)", err);

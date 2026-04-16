@@ -60,14 +60,13 @@ static uint8_t payload_buf[MQTT_QUEUE_MAX_LEN];
 
 static bool connected = false;
 
-bool azure_mqtt_is_connected(void)
-{
+bool azure_mqtt_is_connected(void) {
     return connected;
 }
 
 /* ── Event handler ───────────────────────────────────────── */
-static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt)
-{
+static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt) {
+
     switch (evt->type) {
     case MQTT_EVT_CONNACK:
         if (evt->result == 0) {
@@ -93,8 +92,8 @@ static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt)
 }
 
 /* ── Connect ─────────────────────────────────────────────── */
-static int do_connect(void)
-{
+static int do_connect(void) {
+
     struct addrinfo *result;
     struct sockaddr_in *broker4;
     char port_str[8];
@@ -170,14 +169,14 @@ static int do_connect(void)
     return 0;
 }
 
-int azure_mqtt_connect(void)
-{
+int azure_mqtt_connect(void) {
+
     return do_connect();
 }
 
 /* ── Publish (called from BLE thread — enqueues into ring buffer) ─────── */
-int azure_mqtt_publish(const char *json)
-{
+int azure_mqtt_publish(const char *json) {
+
     if (!connected) {
         LOG_WRN("Not connected — skipping publish");
         return -ENOTCONN;
@@ -203,8 +202,8 @@ int azure_mqtt_publish(const char *json)
 }
 
 /* ── Internal publish (called only from MQTT thread) ─────── */
-static void do_publish(void)
-{
+static void do_publish(void) {
+
     k_mutex_lock(&mqtt_ring_mutex, K_FOREVER);
 
     uint16_t msg_len = 0;
@@ -253,8 +252,8 @@ static void do_publish(void)
 K_THREAD_STACK_DEFINE(azure_mqtt_stack, AZURE_MQTT_STACK);
 static struct k_thread azure_mqtt_tid;
 
-void azure_mqtt_thread(void)
-{
+void azure_mqtt_thread(void) {
+
     LOG_INF("azure_mqtt_thread started");
 
     ring_buf_init(&mqtt_ring, MQTT_RING_BUF_SIZE, mqtt_ring_data);
@@ -290,8 +289,7 @@ void azure_mqtt_thread(void)
     }
 }
 
-void azure_mqtt_thread_start(void)
-{
+void azure_mqtt_thread_start(void) {
     k_thread_create(&azure_mqtt_tid,
                     azure_mqtt_stack,
                     K_THREAD_STACK_SIZEOF(azure_mqtt_stack),

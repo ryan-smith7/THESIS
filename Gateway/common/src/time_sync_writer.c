@@ -27,8 +27,7 @@ static struct bt_gatt_write_params ts_write_params[MAX_CONN];
 
 /* ── Write callback ─────────────────────────────────────── */
 static void ts_write_cb(struct bt_conn *conn, uint8_t err,
-                        struct bt_gatt_write_params *params)
-{
+                        struct bt_gatt_write_params *params) {
     if (err) {
         LOG_WRN("time_sync write failed (err 0x%02x)", err);
     } else {
@@ -38,8 +37,8 @@ static void ts_write_cb(struct bt_conn *conn, uint8_t err,
 
 /* ── Public API ─────────────────────────────────────────── */
 
-void time_sync_writer_set_utc(uint32_t utc_sec, uint16_t utc_ms)
-{
+void time_sync_writer_set_utc(uint32_t utc_sec, uint16_t utc_ms) {
+
     gw_utc_sec    = utc_sec;
     gw_utc_ms     = (utc_ms > 999) ? 999 : utc_ms;
     gw_utc_set_ms = k_uptime_get_32();
@@ -53,8 +52,8 @@ bool time_sync_writer_has_utc(void)
 }
 
 void time_sync_writer_send(struct bt_conn *conn, int index,
-                           uint16_t char_handle)
-{
+                           uint16_t char_handle) {
+                            
     if (!utc_valid) {
         LOG_WRN("time_sync_writer: no UTC available — skipping node %d", index);
         return;

@@ -18,8 +18,7 @@
 LOG_MODULE_REGISTER(json_module, LOG_LEVEL_INF);
 
 /* ── json_encode_env ─────────────────────────────────────── */
-int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size)
-{
+int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
 
     return snprintk(buf, buf_size,
@@ -49,8 +48,7 @@ int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size)
 }
 
 /* ── json_encode_spec ────────────────────────────────────── */
-int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size)
-{
+int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
 
     return snprintk(buf, buf_size,
@@ -94,8 +92,7 @@ int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size)
 }
 
 /* ── json_encode_mst ─────────────────────────────────────── */
-int json_encode_mst(const mod_mst_t *m, char *buf, size_t buf_size)
-{
+int json_encode_mst(const mod_mst_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
 
     return snprintk(buf, buf_size,
@@ -115,8 +112,7 @@ int json_encode_mst(const mod_mst_t *m, char *buf, size_t buf_size)
 }
 
 /* ── json_encode_bat ─────────────────────────────────────── */
-int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size)
-{
+int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
 
     return snprintk(buf, buf_size,
@@ -140,8 +136,7 @@ int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size)
 }
 
 /* ── json_encode_snd ─────────────────────────────────────── */
-int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size)
-{
+int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
 
     int pos = snprintk(buf, buf_size,
@@ -180,8 +175,7 @@ int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size)
     return pos + tail;
 }
 
-int json_encode_cur(const mod_cur_t *m, char *buf, size_t buf_size)
-{
+int json_encode_cur(const mod_cur_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
  
     return snprintk(buf, buf_size,

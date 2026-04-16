@@ -18,14 +18,7 @@
 
 LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
 
-#define RING_BUF_SIZE 256
-#define MAX_JSON_SIZE 512
 #define SAMPLE_PERIOD_MS 10000
-
-/* --- Sensor types --- */
-#define DEV_ID_BME280  1
-#define DEV_ID_ENS160  2
-#define DEV_ID_AS7343  3
 
 #define CONFIG_MOISTURE_DRY_COUNTS  2900
 #define CONFIG_MOISTURE_WET_COUNTS  1200
@@ -43,26 +36,12 @@ K_MSGQ_DEFINE(moisture_q, sizeof(struct moisture_msg),  Q_DEPTH, 4);
 /* Final telemetry queue: full samples -> BLE */
 K_MSGQ_DEFINE(full_q, sizeof(struct sensor_blk), Q_DEPTH, 4);
 
-/* --- Ring buffer + structs --- */
-struct sensor_data {
-    double value1;
-    double value2;
-    double value3;
-    uint8_t sensor_type;
-};
-
-struct json_sensor_output {
-    uint8_t dev_id;
-    char *rtc_time;
-    char *values[20];
-    size_t values_len;
-};
-
 /* -------------------------------------------------------------------------- */
 /* --- BME280 thread --- */
-void bme280_thread(void)
-{
+void bme280_thread(void) {
+
     const struct device *dev = DEVICE_DT_GET_ONE(bosch_bme280);
+
     if (!device_is_ready(dev)) {
         LOG_ERR("BME280 device not ready");
         return;
@@ -106,9 +85,10 @@ void bme280_thread(void)
 
 /* -------------------------------------------------------------------------- */
 /* --- ENS160 thread --- */
-void ens160_thread(void)
-{
+void ens160_thread(void) {
+
     const struct device *dev = DEVICE_DT_GET_ONE(sciosense_ens160);
+
     if (!device_is_ready(dev)) {
         LOG_ERR("ENS160 device not ready");
         return;
@@ -118,6 +98,7 @@ void ens160_thread(void)
     struct sensor_value eco2, tvoc, aqi;
 
     while (1) {
+
         if (sensor_sample_fetch(dev) < 0) {
             LOG_ERR("ENS160: fetch failed");
             k_msleep(SAMPLE_PERIOD_MS);
@@ -152,31 +133,33 @@ void ens160_thread(void)
     }
 }
 
-/* Fixed order we want downstream (index 12 = 999 "VISIBLE") */
+/* -------------------------------------------------------------------------- */
+/* --- AS7343 thread -------------------------------------------------------- */
+
 static const int wl_order[13] = {
     405,425,450,475,515,550,555,600,640,690,745,855,999
 };
 
-static int wl_index(int nm)
-{
+static int wl_index(int nm) {
+
     for (int i = 0; i < 13; ++i) {
         if (wl_order[i] == nm) return i;
     }
     return -1;
 }
 
-/* -------------------------------------------------------------------------- */
-/* --- AS7343 thread -------------------------------------------------------- */
-void as7343_thread(void)
-{
+void as7343_thread(void) {
     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
+
     if (!device_is_ready(dev)) {
         LOG_ERR("AS7343 device not ready");
         return;
     }
+
     LOG_INF("AS7343 device ready");
 
     while (1) {
+
         if (sensor_sample_fetch(dev) < 0) {
             LOG_ERR("AS7343: fetch failed");
             k_msleep(SAMPLE_PERIOD_MS);
@@ -229,8 +212,8 @@ void as7343_thread(void)
 /* -------------------------------------------------------------------------- */
 /* --- Capacitive Soil Moisture Sensor thread ------------------------------- */
 
-static uint16_t compute_vwc_x100(uint16_t raw)
-{
+static uint16_t compute_vwc_x100(uint16_t raw) {
+
     if (raw >= CONFIG_MOISTURE_DRY_COUNTS) return 0;
     if (raw <= CONFIG_MOISTURE_WET_COUNTS) return 10000;
 
@@ -238,8 +221,8 @@ static uint16_t compute_vwc_x100(uint16_t raw)
     return (uint16_t)(num / (CONFIG_MOISTURE_DRY_COUNTS - CONFIG_MOISTURE_WET_COUNTS));
 }
 
-void moisture_thread(void)
-{
+void moisture_thread(void) {
+
     const struct device *adc_dev = DEVICE_DT_GET(DT_NODELABEL(adc1));
 
     if (!device_is_ready(adc_dev)) {
@@ -306,9 +289,10 @@ void moisture_thread(void)
 #if defined(CONFIG_FUEL_GAUGE)
 /* -------------------------------------------------------------------------- */
 /* --- MAX17048 Fuel Gauge thread (commented — enable when hardware ready) -- */
-void max17048_thread(void)
-{
+void max17048_thread(void) {
+
     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
+
     if (!device_is_ready(dev)) {
         LOG_ERR("MAX17048 fuel gauge not ready");
         return;
@@ -360,14 +344,10 @@ void max17048_thread(void)
 }
 #endif
 
-
-
-
 /* -------------------------------------------------------------------------- */
-/* --- Combiner thread ------------------------------------------------------ */
+/* --- Combiner thread (LEGACY) --------------------------------------------- */
 /* Retains latest partials and emits a full frame once per tick             */
-void combiner_thread(void)
-{
+void combiner_thread(void) {
     struct bme280_msg   bme   = {0};
     struct ens160_msg   ens   = {0};
     struct as7343_msg   as7   = {0};

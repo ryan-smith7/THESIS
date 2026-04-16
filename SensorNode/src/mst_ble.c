@@ -37,14 +37,20 @@ MODALITY_CCC_CHANGED(mst, mst_notify_enabled);
 MODALITY_READ_HANDLER(mst, mst_buf, MST_BUF_LEN);
 MODALITY_GATT_SERVICE(mst, MST_SVC_UUID_BYTES, MST_CHR_UUID_BYTES);
 
-static void mst_connected(struct bt_conn *conn, uint8_t err)
-{
-    if (!err) mst_conn = bt_conn_ref(conn);
+static void mst_connected(struct bt_conn *conn, uint8_t err) {
+    
+    if (!err) {
+        mst_conn = bt_conn_ref(conn);
+    }
 }
 
-static void mst_disconnected(struct bt_conn *conn, uint8_t reason)
-{
-    if (mst_conn) { bt_conn_unref(mst_conn); mst_conn = NULL; }
+static void mst_disconnected(struct bt_conn *conn, uint8_t reason) {
+
+    if (mst_conn) {
+        bt_conn_unref(mst_conn);
+        mst_conn = NULL;
+    }
+
     mst_notify_enabled = false;
 }
 
@@ -53,8 +59,8 @@ static struct bt_conn_cb mst_conn_cb = {
     .disconnected = mst_disconnected,
 };
 
-static void mst_pack_and_notify(const struct moisture_msg *msg)
-{
+void mst_pack_and_notify(const struct moisture_msg *msg) {
+
     struct bt_conn *conn = mst_conn;
     if (!conn || !mst_notify_enabled) return;
 
@@ -70,13 +76,8 @@ static void mst_pack_and_notify(const struct moisture_msg *msg)
     MODALITY_NOTIFY(mst, conn, mst_notify_enabled, mst_buf, MST_BUF_LEN);
 }
 
-void mst_ble_notify_offline(const struct moisture_msg *msg)
-{
-    mst_pack_and_notify(msg);
-}
+void mst_ble_thread(void) {
 
-void mst_ble_thread(void)
-{
     bt_conn_cb_register(&mst_conn_cb);
     LOG_INF("mst_ble thread ready");
  
