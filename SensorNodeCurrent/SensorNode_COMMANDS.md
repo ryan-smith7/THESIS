@@ -11,6 +11,7 @@ source zephyr/zephyr-env.sh
 
 ```bash
 cd SensorNode
+# seeeduino_xiao
 west build -b esp32_devkitc/esp32/procpu ~/csse4011/repo/prac2/SensorNode --pristine
 ```
 

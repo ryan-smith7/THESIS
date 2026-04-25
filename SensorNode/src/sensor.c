@@ -10,7 +10,6 @@
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/fuel_gauge.h>
 #include "as7343.h"
-#include "sound.h"
 #include "sensor.h"
 #include "time_sync.h"
 
@@ -20,11 +19,29 @@ LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
 
 #define SAMPLE_PERIOD_MS 10000
 
-#define CONFIG_MOISTURE_DRY_COUNTS  2900
-#define CONFIG_MOISTURE_WET_COUNTS  1200
 
-#define MOISTURE_ADC_SPEC \
-    ADC_DT_SPEC_GET_BY_IDX(DT_PATH(zephyr_user), 0)
+/* ── Moisture Sensor Polynomial Calibration ────────────────────────────────
+ * θ_g (%) = a2·V² + a1·V + a0
+ * where V = raw ADC count (0–4095)
+ * Coefficients from moisture_calibration.xlsx → Coefficients sheet
+ * ───────────────────────────────────────────────────────────────────────── */
+#define CONFIG_MOISTURE_COEFF_A3  -0.0000001329f
+#define CONFIG_MOISTURE_COEFF_A2  0.00066405f
+#define CONFIG_MOISTURE_COEFF_A1  -1.12157489f
+#define CONFIG_MOISTURE_COEFF_A0  710.879841f
+
+/* ── Moisture Sensor Two Point Calibration -- */
+#define CONFIG_MOISTURE_DRY_COUNTS  2371
+#define CONFIG_MOISTURE_WET_COUNTS  1053
+
+
+#define SAMPLE_PERIOD_ENV_MS            500U
+#define SAMPLE_PERIOD_SPECTRUM_MS       250U
+#define SAMPLE_PERIOD_MOISTURE_MS       5000U
+#define SAMPLE_PERIOD_BATTERY_MS        60000U
+
+static const struct adc_dt_spec moisture_adc =
+    ADC_DT_SPEC_GET_BY_IDX(DT_PATH(zephyr_user), 0);
 
 /*  item_size, depth, align */
 K_MSGQ_DEFINE(bme_q,      sizeof(struct bme280_msg),    Q_DEPTH, 4);
@@ -60,16 +77,12 @@ void bme280_thread(void) {
         sensor_channel_get(dev, SENSOR_CHAN_PRESS, &press);
         sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &hum);
 
-        uint16_t bme_utc_ms;
-        uint32_t bme_utc_sec = time_sync_get_utc_ms(&bme_utc_ms);
-
-        struct bme280_msg m = {
-            .temp_c    = sensor_value_to_double(&temp),
-            .rh_pct    = sensor_value_to_double(&hum),
-            .press_hPa = sensor_value_to_double(&press),
-            .utc_sec   = bme_utc_sec,
-            .utc_ms    = bme_utc_ms,
-        };
+        struct bme280_msg m = {0};  /* zero entire struct first */
+        m.temp_c    = sensor_value_to_double(&temp);
+        m.rh_pct    = sensor_value_to_double(&hum);
+        m.press_hPa = sensor_value_to_double(&press);
+        m.utc_sec = time_sync_get_utc_ms(&m.utc_ms);
+        m.uptime_ms = (uint64_t)k_uptime_get();
 
         printk("BME put: T=%.2fC RH=%.2f%% P=%.3f(kPa?) UTC=%u.%03u\n",
             m.temp_c, m.rh_pct, m.press_hPa, m.utc_sec, m.utc_ms);
@@ -79,7 +92,7 @@ void bme280_thread(void) {
             (void)k_msgq_get(&bme_q, &dump, K_NO_WAIT);
             (void)k_msgq_put(&bme_q, &m, K_NO_WAIT);
         }
-        k_msleep(SAMPLE_PERIOD_MS);
+        k_msleep(SAMPLE_PERIOD_ENV_MS);
     }
 }
 
@@ -109,16 +122,12 @@ void ens160_thread(void) {
         sensor_channel_get(dev, SENSOR_CHAN_VOC, &tvoc);
         sensor_channel_get(dev, SENSOR_CHAN_ENS160_AQI, &aqi);
 
-        uint16_t ens_utc_ms;
-        uint32_t ens_utc_sec = time_sync_get_utc_ms(&ens_utc_ms);
-
-        struct ens160_msg m = {
-            .eco2_ppm = eco2.val1,
-            .tvoc_ppb = tvoc.val1,
-            .aqi      = aqi.val1,
-            .utc_sec  = ens_utc_sec,
-            .utc_ms   = ens_utc_ms,
-        };
+        struct ens160_msg m = {0};  /* zero entire struct first */
+        m.eco2_ppm = eco2.val1;
+        m.tvoc_ppb = tvoc.val1;
+        m.aqi      = aqi.val1;
+        m.utc_sec = time_sync_get_utc_ms(&m.utc_ms);
+        m.uptime_ms = (uint64_t)k_uptime_get();
 
         printk("ENS put: eCO2=%d TVOC=%d AQI=%d UTC=%u.%03u\n",
             m.eco2_ppm, m.tvoc_ppb, m.aqi, m.utc_sec, m.utc_ms);
@@ -129,26 +138,142 @@ void ens160_thread(void) {
             (void)k_msgq_put(&ens_q, &m, K_NO_WAIT);
         }
 
-        k_msleep(SAMPLE_PERIOD_MS);
+        k_msleep(SAMPLE_PERIOD_ENV_MS);
+    }
+}
+
+/* ── combined BME280 + ENS160 thread ───────────────────────────────────── */
+void env_thread(void) {
+    const struct device *bme_dev = DEVICE_DT_GET_ONE(bosch_bme280);
+    const struct device *ens_dev = DEVICE_DT_GET_ONE(sciosense_ens160);
+
+    if (!device_is_ready(bme_dev)) {
+        LOG_ERR("BME280 not ready");
+        return;
+    }
+    if (!device_is_ready(ens_dev)) {
+        LOG_ERR("ENS160 not ready");
+        return;
+    }
+    LOG_INF("ENV thread: BME280 + ENS160 ready");
+
+    struct sensor_value temp, press, hum, eco2, tvoc, aqi;
+
+    while (1) {
+        /* ── 1. Fetch BME280 ───────────────────────────────────────────── */
+        if (sensor_sample_fetch(bme_dev) < 0) {
+            LOG_ERR("BME280: fetch failed");
+            k_msleep(SAMPLE_PERIOD_ENV_MS);
+            continue;
+        }
+
+        sensor_channel_get(bme_dev, SENSOR_CHAN_AMBIENT_TEMP, &temp);
+        sensor_channel_get(bme_dev, SENSOR_CHAN_PRESS,        &press);
+        sensor_channel_get(bme_dev, SENSOR_CHAN_HUMIDITY,     &hum);
+
+        struct bme280_msg bme = {0};
+        bme.temp_c    = sensor_value_to_double(&temp);
+        bme.rh_pct    = sensor_value_to_double(&hum);
+        bme.press_hPa = sensor_value_to_double(&press);
+        bme.utc_sec   = time_sync_get_utc_ms(&bme.utc_ms);
+        bme.uptime_ms = (uint64_t)k_uptime_get();
+
+        /* ── 2. Push compensation to ENS160 ────────────────────────────── */
+        /*
+         * sensor_attr_set() writes TEMP_IN (0x13) and RH_IN (0x15).
+         * The Zephyr ENS160 driver converts internally:
+         *   TEMP_IN = (T_celsius + 273.15) * 64   [1/64 K, little-endian]
+         *   RH_IN   = RH_percent * 512             [1/512 %RH, little-endian]
+         * We must write BEFORE sensor_sample_fetch(ens_dev) so the ENS160
+         * bakes these values into the very next measurement cycle.
+         */
+        struct sensor_value temp_clamped = hum;
+        temp_clamped.val1 = CLAMP(temp_clamped.val1, -5, 60);
+
+        struct sensor_value hum_clamped = hum;
+        hum_clamped.val1 = CLAMP(hum_clamped.val1, 20, 80);
+
+        if (sensor_attr_set(ens_dev, SENSOR_CHAN_ALL,
+                            SENSOR_ATTR_ENS160_TEMP, &temp_clamped) < 0) {
+            LOG_WRN("ENS160: TEMP_IN write failed — uncompensated");
+        }
+        if (sensor_attr_set(ens_dev, SENSOR_CHAN_ALL,
+                            SENSOR_ATTR_ENS160_RH, &hum_clamped) < 0) {
+            LOG_WRN("ENS160: RH_IN write failed — uncompensated");
+        }
+
+        /* ── 3. Fetch ENS160 (now uses the T/RH we just wrote) ─────────── */
+        if (sensor_sample_fetch(ens_dev) < 0) {
+            LOG_ERR("ENS160: fetch failed");
+            k_msleep(SAMPLE_PERIOD_ENV_MS);
+            continue;
+        }
+
+        sensor_channel_get(ens_dev, SENSOR_CHAN_CO2,          &eco2);
+        sensor_channel_get(ens_dev, SENSOR_CHAN_VOC,          &tvoc);
+        sensor_channel_get(ens_dev, SENSOR_CHAN_ENS160_AQI,   &aqi);
+
+        struct ens160_msg ens = {0};
+        ens.eco2_ppm  = eco2.val1;
+        ens.tvoc_ppb  = tvoc.val1;
+        ens.aqi       = aqi.val1;
+        ens.utc_sec   = time_sync_get_utc_ms(&ens.utc_ms);
+        ens.uptime_ms = (uint64_t)k_uptime_get();
+
+        /* ── 4. Publish BME280 message ──────────────────────────────────── */
+
+        printk("BME: T=%.2fC RH=%.2f%% P=%.3fhPa UTC=%u.%03u\n",
+               bme.temp_c, bme.rh_pct, bme.press_hPa,
+               bme.utc_sec, bme.utc_ms);
+
+        if (k_msgq_put(&bme_q, &bme, K_NO_WAIT) != 0) {
+            struct bme280_msg dump;
+            k_msgq_get(&bme_q, &dump, K_NO_WAIT);
+            k_msgq_put(&bme_q, &bme, K_NO_WAIT);
+        }
+
+        /* ── 5. Publish ENS160 message ──────────────────────────────────── */
+
+        printk("ENS: eCO2=%d TVOC=%d AQI=%d UTC=%u.%03u (comp T=%.1fC RH=%.1f%%)\n",
+               ens.eco2_ppm, ens.tvoc_ppb, ens.aqi,
+               ens.utc_sec, ens.utc_ms,
+               sensor_value_to_double(&temp),
+               sensor_value_to_double(&hum));
+
+        if (k_msgq_put(&ens_q, &ens, K_NO_WAIT) != 0) {
+            struct ens160_msg dump;
+            k_msgq_get(&ens_q, &dump, K_NO_WAIT);
+            k_msgq_put(&ens_q, &ens, K_NO_WAIT);
+        }
+
+        k_msleep(SAMPLE_PERIOD_ENV_MS);
     }
 }
 
 /* -------------------------------------------------------------------------- */
 /* --- AS7343 thread -------------------------------------------------------- */
 
+/* wl_order: 12 spectral wavelengths in ascending order + 999 (VIS clear)    */
+/* Index in this array == index into msg.ch[] and ch12[]                     */
+/* ch[0..11] = spectral irradiance in µW/m² (mW/m² × 1000, clamped uint16)  */
+/* ch[12]    = VIS broadband irradiance in µW/m² from dedicated clear PD     */
+
 static const int wl_order[13] = {
-    405,425,450,475,515,550,555,600,640,690,745,855,999
+    405, 425, 450, 475, 515, 550, 555, 600, 640, 690, 745, 855, 999
 };
 
-static int wl_index(int nm) {
-
+static int wl_index(int nm)
+{
     for (int i = 0; i < 13; ++i) {
-        if (wl_order[i] == nm) return i;
+        if (wl_order[i] == nm) {
+            return i;
+        }
     }
     return -1;
 }
 
-void as7343_thread(void) {
+void as7343_thread(void)
+{
     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
 
     if (!device_is_ready(dev)) {
@@ -166,38 +291,87 @@ void as7343_thread(void) {
             continue;
         }
 
-        uint16_t ch12[13] = {0};
+        uint32_t ch12[13] = {0};
         struct sensor_value val;
 
+        /* Read all 18 DATA channels from the driver.                         */
+        /* val.val1 = wavelength nm  (0=flicker, 999=VIS clear, else spectral)*/
+        /* val.val2 = irradiance in µW/m²  (= mW/m² * 1000, int32)           */
+        /* wl_index() maps wavelength → ch12[] slot (0..11 spectral, 12=VIS) */
+        /* Flicker channels (nm=0) return idx=-1 and are skipped.             */
+        /* No clamping needed: uint32 holds up to 4295 W/m², above any real   */
+        /* light source. val.val2 is always >= 0 (uint16 counts / positive s) */
         for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
             if (sensor_channel_get(dev, SENSOR_CHAN_PRIV_START + i, &val) == 0) {
                 int nm  = val.val1;
                 int idx = wl_index(nm);
-                if (idx >= 0) {
-                    int c = val.val2;
-                    if (c < 0)      c = 0;
-                    if (c > 0xFFFF) c = 0xFFFF;
-                    ch12[idx] = (uint16_t)c;
+                if (idx >= 0 && idx < 12) {
+                    ch12[idx] = (uint32_t)val.val2;
+                    LOG_DBG("AS7343: channel nm=%d (chan=%d)", nm, i);
                 } else {
-                    LOG_DBG("AS7343: skip unknown nm=%d (chan=%d)", nm, i);
+                    LOG_DBG("AS7343: skip nm=%d (chan=%d)", nm, i);
                 }
             }
         }
 
+        /* ch12[12] = VIS broadband irradiance from dedicated clear PD.       */
+        /* Sourced from data->vis_irradiance_mW (averaged DATA4/10/16),       */
+        /* which uses the Fig.9 R_typ=999 responsivity — not a sum of         */
+        /* spectral channels.                                                 */
+        
+        const struct as7343_data *drv =
+            (const struct as7343_data *)dev->data;
+        ch12[12] = (uint32_t)(drv->vis_irradiance_mW * 1000.0f);
+        
+
+        /* Pack into message ------------------------------------------------ */
         struct as7343_msg msg = {0};
-        uint32_t vis = 0;
-        for (int i = 0; i < 12; ++i) {
+
+        for (int i = 0; i < 13; ++i) {
             msg.ch[i] = ch12[i];
-            vis += ch12[i];
         }
-        if (vis > 0xFFFF) vis = 0xFFFF;
-        msg.ch[12] = (uint16_t)vis;
 
         /* Stamp UTC at measurement moment */
-        msg.utc_sec = time_sync_get_utc_ms(&msg.utc_ms);
+        msg.utc_sec   = time_sync_get_utc_ms(&msg.utc_ms);
+        msg.uptime_ms = (uint64_t)k_uptime_get();
 
-        printk("AS7 put: 450nm=%u 600nm=%u VIS=%u UTC=%u.%03u\n",
-               msg.ch[2], msg.ch[7], msg.ch[12], msg.utc_sec, msg.utc_ms);
+        printk("RAW: %u %u %u %u %u %u %u %u %u %u %u %u\n",
+            drv->channel_data[12],  /* F1  405nm */
+            drv->channel_data[6],   /* F2  425nm */
+            drv->channel_data[0],   /* FZ  450nm */
+            drv->channel_data[7],   /* F3  475nm */
+            drv->channel_data[8],   /* F4  515nm */
+            drv->channel_data[15],  /* F5  550nm */
+            drv->channel_data[1],   /* FY  555nm */
+            drv->channel_data[2],   /* FXL 600nm */
+            drv->channel_data[9],   /* F6  640nm */
+            drv->channel_data[13],  /* F7  690nm */
+            drv->channel_data[14],  /* F8  745nm */
+            drv->channel_data[3]);  /* NIR 855nm */
+
+        /* ch[2]=450nm(FZ), ch[7]=600nm(FXL), ch[12]=VIS broadband           */
+        printk("AS7 put: "
+               "405nm=%.2f 425nm=%.2f 450nm=%.2f 475nm=%.2f "
+               "515nm=%.2f 550nm=%.2f 555nm=%.2f 600nm=%.2f "
+               "640nm=%.2f 690nm=%.2f 745nm=%.2f 855nm=%.2f "
+               "SUM=%.2f VIS=%.2f mW/m2 UTC=%u.%03u\n",
+               msg.ch[0]  / 1000.0f,   /* 405nm F1  */
+               msg.ch[1]  / 1000.0f,   /* 425nm F2  */
+               msg.ch[2]  / 1000.0f,   /* 450nm FZ  */
+               msg.ch[3]  / 1000.0f,   /* 475nm F3  */
+               msg.ch[4]  / 1000.0f,   /* 515nm F4  */
+               msg.ch[5]  / 1000.0f,   /* 550nm F5  */
+               msg.ch[6]  / 1000.0f,   /* 555nm FY  */
+               msg.ch[7]  / 1000.0f,   /* 600nm FXL */
+               msg.ch[8]  / 1000.0f,   /* 640nm F6  */
+               msg.ch[9]  / 1000.0f,   /* 690nm F7  */
+               msg.ch[10] / 1000.0f,   /* 745nm F8  */
+               msg.ch[11] / 1000.0f,   /* 855nm NIR */
+               (msg.ch[0] + msg.ch[1] + msg.ch[2]  + msg.ch[3] +
+                msg.ch[4] + msg.ch[5] + msg.ch[6]  + msg.ch[7] +
+                msg.ch[8] + msg.ch[9] + msg.ch[10] + msg.ch[11]) / 1000.0f,
+               msg.ch[12] / 1000.0f,   /* VIS broadband clear PD */
+               msg.utc_sec, msg.utc_ms);
 
         if (k_msgq_put(&as7_q, &msg, K_NO_WAIT) != 0) {
             struct as7343_msg dump;
@@ -209,72 +383,166 @@ void as7343_thread(void) {
     }
 }
 
+// /* -------------------------------------------------------------------------- */
+// /* --- AS7343 thread -------------------------------------------------------- */
+
+// static const int wl_order[13] = {
+//     405,425,450,475,515,550,555,600,640,690,745,855,999
+// };
+
+// static int wl_index(int nm) {
+
+//     for (int i = 0; i < 13; ++i) {
+//         if (wl_order[i] == nm) {
+//             return i;
+//         }
+//     }
+//     return -1;
+// }
+
+// void as7343_thread(void) {
+//     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
+
+//     if (!device_is_ready(dev)) {
+//         LOG_ERR("AS7343 device not ready");
+//         return;
+//     }
+
+//     LOG_INF("AS7343 device ready");
+
+//     while (1) {
+
+//         if (sensor_sample_fetch(dev) < 0) {
+//             LOG_ERR("AS7343: fetch failed");
+//             k_msleep(SAMPLE_PERIOD_MS);
+//             continue;
+//         }
+
+//         uint16_t ch12[13] = {0};
+//         struct sensor_value val;
+
+//         for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
+//             if (sensor_channel_get(dev, SENSOR_CHAN_PRIV_START + i, &val) == 0) {
+//                 int nm  = val.val1;
+//                 int idx = wl_index(nm);
+//                 if (idx >= 0) {
+//                     int c = val.val2;
+//                     if (c < 0)c = 0;
+//                     if (c > 0xFFFF) c = 0xFFFF;
+//                     ch12[idx] = (uint16_t)c;
+//                 } else {
+//                     LOG_DBG("AS7343: skip unknown nm=%d (chan=%d)", nm, i);
+//                 }
+//             }
+//         }
+
+//         struct as7343_msg msg = {0};
+//         uint32_t vis = 0;
+//         for (int i = 0; i < 12; ++i) {
+//             msg.ch[i] = ch12[i];
+//             vis += ch12[i];
+//         }
+//         if (vis > 0xFFFF) vis = 0xFFFF;
+//         msg.ch[12] = (uint16_t)vis;
+
+//         /* Stamp UTC at measurement moment */
+//         msg.utc_sec = time_sync_get_utc_ms(&msg.utc_ms);
+//         msg.uptime_ms = (uint64_t)k_uptime_get();
+
+//         printk("AS7 put: 450nm=%u 600nm=%u VIS=%u UTC=%u.%03u\n",
+//                msg.ch[2], msg.ch[7], msg.ch[12], msg.utc_sec, msg.utc_ms);
+
+//         if (k_msgq_put(&as7_q, &msg, K_NO_WAIT) != 0) {
+//             struct as7343_msg dump;
+//             (void)k_msgq_get(&as7_q, &dump, K_NO_WAIT);
+//             (void)k_msgq_put(&as7_q, &msg, K_NO_WAIT);
+//         }
+
+//         k_msleep(SAMPLE_PERIOD_MS);
+//     }
+// }
+
 /* -------------------------------------------------------------------------- */
 /* --- Capacitive Soil Moisture Sensor thread ------------------------------- */
+#if defined(CONFIG_MST_POLY)
+/* Polynomial calibration: θ_g (%) = a3·V³ + a2·V² + a1·V + a0
+ * Input:  raw 12-bit ADC count (0–4095)
+ * Output: gravimetric moisture x100 fixed-point (e.g. 4250 = 42.50%)
+ * Clamped to [0, 10000] (0–100%)                                      */
+static uint16_t compute_moisture_x100_poly(uint16_t raw) {
+    float v   = (float)raw;
+    float pct = (CONFIG_MOISTURE_COEFF_A3 * v * v * v)
+              + (CONFIG_MOISTURE_COEFF_A2 * v * v)
+              + (CONFIG_MOISTURE_COEFF_A1 * v)
+              +  CONFIG_MOISTURE_COEFF_A0;
 
-static uint16_t compute_vwc_x100(uint16_t raw) {
+    if (pct < 0.0f)   pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
 
-    if (raw >= CONFIG_MOISTURE_DRY_COUNTS) return 0;
-    if (raw <= CONFIG_MOISTURE_WET_COUNTS) return 10000;
+    return (uint16_t)(pct * 100.0f);
+}
+#else 
+static uint16_t compute_vwc_x100_two_point(uint16_t raw) {
+
+    if (raw >= CONFIG_MOISTURE_DRY_COUNTS) {
+        return 0;
+    }
+    if (raw <= CONFIG_MOISTURE_WET_COUNTS) {
+        return 10000;
+    }
 
     uint32_t num = (uint32_t)(CONFIG_MOISTURE_DRY_COUNTS - raw) * 10000U;
     return (uint16_t)(num / (CONFIG_MOISTURE_DRY_COUNTS - CONFIG_MOISTURE_WET_COUNTS));
 }
+#endif
 
 void moisture_thread(void) {
 
-    const struct device *adc_dev = DEVICE_DT_GET(DT_NODELABEL(adc1));
-
-    if (!device_is_ready(adc_dev)) {
-        LOG_ERR("Moisture: ADC device not ready");
+    if (!adc_is_ready_dt(&moisture_adc)) {
+        LOG_ERR("Moisture: ADC not ready");
         return;
     }
 
-    struct adc_channel_cfg ch_cfg = {
-        .gain             = ADC_GAIN_1,
-        .reference        = ADC_REF_INTERNAL,
-        .acquisition_time = ADC_ACQ_TIME_DEFAULT,
-        .channel_id       = 7,
-    };
-
-    if (adc_channel_setup(adc_dev, &ch_cfg) < 0) {
-        LOG_ERR("Moisture: ADC channel setup failed");
+    if (adc_channel_setup_dt(&moisture_adc) < 0) {
+        LOG_ERR("Moisture: channel setup failed");
         return;
     }
 
     LOG_INF("Moisture: ADC ready");
 
-    int16_t sample_buf;
+    uint16_t buf;
     struct adc_sequence seq = {
-        .channels    = BIT(7),
-        .buffer      = &sample_buf,
-        .buffer_size = sizeof(sample_buf),
-        .resolution  = 12,
+        .buffer      = &buf,
+        .buffer_size = sizeof(buf),
     };
 
     while (1) {
-        sample_buf = 0;
-        if (adc_read(adc_dev, &seq) < 0) {
-            LOG_ERR("Moisture: ADC read failed");
+        (void)adc_sequence_init_dt(&moisture_adc, &seq);
+
+        if (adc_read_dt(&moisture_adc, &seq) < 0) {
+            LOG_ERR("Moisture: read failed");
             k_msleep(SAMPLE_PERIOD_MS);
             continue;
         }
 
-        uint16_t raw = (uint16_t)CLAMP(sample_buf, 0, 4095);
-        LOG_INF("Moisture: raw=%u", raw);
-        uint16_t vwc = compute_vwc_x100(raw);
+        int32_t val_mv = (int32_t)buf;
+        adc_raw_to_millivolts_dt(&moisture_adc, &val_mv);
 
-        uint16_t mst_utc_ms;
-        uint32_t mst_utc_sec = time_sync_get_utc_ms(&mst_utc_ms);
+        LOG_INF("Moisture: raw=%u  mV=%d", buf, (int)val_mv);
 
-        struct moisture_msg m = {
-            .vwc_x100 = vwc,
-            .utc_sec  = mst_utc_sec,
-            .utc_ms   = mst_utc_ms,
-        };
+        // uint16_t vwc = compute_vwc_x100_two_point(val_mv);
 
-        printk("MOIST put: raw=%u  VWC=%.2f%%  UTC=%u.%03u\n",
-            raw, (double)vwc / 100.0, m.utc_sec, m.utc_ms);
+        // /* Use raw count for polynomial — calibrated against ADC counts, not mV */
+        uint16_t vwc = compute_moisture_x100_poly(buf);
+
+        struct moisture_msg m = {0};
+        m.vwc_x100 = vwc;
+        m.utc_sec = time_sync_get_utc_ms(&m.utc_ms);
+        m.uptime_ms = (uint64_t)k_uptime_get();
+
+        printk("MOIST put: raw=%u  mV=%d  VWC=%.2f%%  UTC=%u.%03u\n",
+            buf, (int)val_mv, (double)vwc / 100.0,
+            m.utc_sec, m.utc_ms);
 
         if (k_msgq_put(&moisture_q, &m, K_NO_WAIT) != 0) {
             struct moisture_msg dump;
@@ -282,7 +550,7 @@ void moisture_thread(void) {
             (void)k_msgq_put(&moisture_q, &m, K_NO_WAIT);
         }
 
-        k_msleep(SAMPLE_PERIOD_MS);
+        k_msleep(SAMPLE_PERIOD_MOISTURE_MS);
     }
 }
 
@@ -343,67 +611,3 @@ void max17048_thread(void) {
     }
 }
 #endif
-
-/* -------------------------------------------------------------------------- */
-/* --- Combiner thread (LEGACY) --------------------------------------------- */
-/* Retains latest partials and emits a full frame once per tick             */
-void combiner_thread(void) {
-    struct bme280_msg   bme   = {0};
-    struct ens160_msg   ens   = {0};
-    struct as7343_msg   as7   = {0};
-    struct batt_msg     bat   = {.mV = 0};
-    struct sound_msg    snd   = {0};
-    struct moisture_msg moist = {0};
-
-    bool have_bme=false, have_ens=false, have_as7=false, have_bat=false;
-
-    const uint8_t PROTO_VER = 1;
-    const uint8_t DEV_ID    = DEVICE_ID;
-
-    while (1) {
-        if (k_msgq_get(&bme_q,      &bme,   K_NO_WAIT) == 0) have_bme = true;
-        if (k_msgq_get(&ens_q,      &ens,   K_NO_WAIT) == 0) have_ens = true;
-        if (k_msgq_get(&as7_q,      &as7,   K_NO_WAIT) == 0) have_as7 = true;
-        if (k_msgq_get(&batt_q,     &bat,   K_NO_WAIT) == 0) have_bat = true;
-        (void)k_msgq_get(&sound_q,    &snd,   K_NO_WAIT);
-        (void)k_msgq_get(&moisture_q, &moist, K_NO_WAIT);
-
-        struct sensor_blk s = {0};
-        uint16_t blk_utc_ms;
-        s.time      = time_sync_get_utc_ms(&blk_utc_ms);
-        s.time_ms   = blk_utc_ms;
-        s.uptime_ms = k_uptime_get_32();
-        s.proto_ver = PROTO_VER;
-        s.dev_id    = DEV_ID;
-
-        s.temp_c_x100     = (int16_t)(bme.temp_c    * 100.0);
-        s.rh_x100         = (int16_t)(bme.rh_pct    * 100.0);
-        s.press_hPa_x1000 = (int32_t)(bme.press_hPa * 1000.0);
-
-        s.eco2_ppm = (uint16_t)ens.eco2_ppm;
-        s.tvoc_ppb = (uint16_t)ens.tvoc_ppb;
-        s.aqi      = (uint8_t) ens.aqi;
-
-        for (int i = 0; i < 12; ++i) {
-            s.as7343[i] = as7.ch[i];
-        }
-
-        s.batt_mV       = bat.mV;
-        s.batt_pct      = bat.pct;
-        s.batt_rate_x10 = bat.rate_x10;
-
-        s.snd_rms_dbfs_x100 = snd.rms_dbfs_x100;
-        s.snd_peak_freq_hz  = snd.peak_freq_hz;
-        s.snd_peak_mag_x10  = snd.peak_mag_x10;
-
-        s.soil_vwc_x100 = moist.vwc_x100;
-
-        if (k_msgq_put(&full_q, &s, K_NO_WAIT) != 0) {
-            struct sensor_blk dump;
-            (void)k_msgq_get(&full_q, &dump, K_NO_WAIT);
-            (void)k_msgq_put(&full_q, &s, K_NO_WAIT);
-        }
-
-        k_msleep(SAMPLE_PERIOD_MS);
-    }
-}

@@ -14,7 +14,7 @@
 
 #include "cur_ble.h"
 #include "modality_ble.h"
-#include "sd_log.h"
+// #include "sd_log.h"
 
 LOG_MODULE_REGISTER(cur_ble, LOG_LEVEL_INF);
 
@@ -28,15 +28,17 @@ LOG_MODULE_REGISTER(cur_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xCC
 
-#define CUR_BUF_LEN 10  /* utc_sec(4) + utc_ms(2) + current_uA(2) + voltage_mV(2) */
+#define CUR_BUF_LEN 11  /* utc_sec(4) + utc_ms(2) + current_uA(2) + voltage_mV(2) */
 
 static bool            cur_notify_enabled = false;
 static struct bt_conn *cur_conn           = NULL;
 static uint8_t         cur_buf[CUR_BUF_LEN];
 
-MODALITY_CCC_CHANGED(cur, cur_notify_enabled);
+MODALITY_CCC_CHANGED_NOSEM(cur, cur_notify_enabled);
 MODALITY_READ_HANDLER(cur, cur_buf, CUR_BUF_LEN);
 MODALITY_GATT_SERVICE(cur, CUR_SVC_UUID_BYTES, CUR_CHR_UUID_BYTES);
+
+#define LOG_UTC_MIN  1700000000U
 
 static void cur_connected(struct bt_conn *conn, uint8_t err) {
     
@@ -76,31 +78,27 @@ void cur_pack_and_notify(const struct current_msg *msg) {
     cur_buf[7] =  msg->current_uA        & 0xFF;
     cur_buf[8] = (msg->voltage_mV >>  8) & 0xFF;  /* voltage [8-9] */
     cur_buf[9] =  msg->voltage_mV        & 0xFF;
+    cur_buf[10] =  DEVICE_ID;                      /* dev_id  [10]   */
 
     MODALITY_NOTIFY(cur, conn, cur_notify_enabled, cur_buf, CUR_BUF_LEN);
 }
 
 void cur_ble_thread(void) {
-
+ 
     bt_conn_cb_register(&cur_conn_cb);
     LOG_INF("cur_ble thread ready");
-
+ 
     while (1) {
         struct current_msg msg;
         if (k_msgq_get(&current_q, &msg, K_FOREVER) != 0) {
             continue;
         }
-
-        if (cur_notify_enabled && cur_conn) {
-            if (msg.utc_sec > SD_LOG_UTC_MIN) {
-                cur_pack_and_notify(&msg);
-            } else {
-                /* Connected but no UTC sync yet — drop rather than
-                 * send untimestampable data. No SD logging for this
-                 * modality (not yet implemented). */
-                LOG_DBG("CUR: dropping live sample — no UTC sync");
-            }
+ 
+        if (cur_notify_enabled && cur_conn && (msg.utc_sec > LOG_UTC_MIN)) {
+            cur_pack_and_notify(&msg);
+        } else {
+            LOG_DBG("CUR: dropping sample — no UTC sync or not connected");
         }
-        /* No SD logging for current modality — not yet implemented */
+        /* SD logging not yet implemented for current modality */
     }
 }

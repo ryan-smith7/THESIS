@@ -6,8 +6,10 @@
 #define BME_BLE_STACK_SIZE  2048
 #define BME_BLE_PRIORITY    6
 
+extern struct k_sem bme_notify_sem;
+
 extern void bme_ble_thread(void);
 
-extern void bme_pack_and_notify(const struct bme280_msg *msg);
+extern bool bme_pack_and_notify(const struct bme280_msg *msg);
 
 #endif /* BME_BLE_H */

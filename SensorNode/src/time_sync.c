@@ -50,14 +50,15 @@ static struct k_spinlock  lock;
  * slope < 1  → local clock runs slow (negative drift_ppm)
  */
 static void update_drift(void) {
-    if (point_count < 2) {
-        return;
-    }
 
     /* Anchor = oldest point in the circular buffer */
     uint8_t oldest = point_head % point_count;  /* valid once count >= 1 */
     base_utc_ms   = points[oldest].utc_ms;
     base_local_ms = points[oldest].local_uptime_ms;
+
+    if (point_count < 2) {
+        return;
+    }
 
     int64_t sum_xx = 0;   /* Σ local_elapsed² */
     int64_t sum_xy = 0;   /* Σ local_elapsed × utc_elapsed_ms */

@@ -32,8 +32,6 @@ label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
 .fs.u{color:#555568}
 .rb{background:none;border:none;color:#555568;cursor:pointer;font-size:20px;padding:2px 6px;line-height:1;flex-shrink:0;transition:.15s}
 .rb:hover{color:#ff6e6e}
-
-/* Merge panel */
 .merge-panel{width:100%;max-width:680px;background:#16161a;border:1px solid #252530;border-radius:10px;padding:16px 20px;margin-bottom:16px;display:none}
 .merge-panel.visible{display:block}
 .merge-title{font-family:'Syne Mono',monospace;font-size:11px;color:#7fff6e;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
@@ -55,7 +53,6 @@ label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
 .pair-utc{color:#7fff6e}.pair-plus{color:#555568}.pair-upt{color:#6eb8ff}
 .pair-arrow{color:#555568;margin:0 4px}
 .pair-out{color:#fff}
-
 .cvt{width:100%;max-width:680px;padding:16px;background:#7fff6e;color:#000;border:none;border-radius:12px;font-family:'Syne',sans-serif;font-size:15px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;transition:.15s;display:block;margin-bottom:8px}
 .cvt:hover:not(:disabled){background:#9fff90;transform:translateY(-1px)}
 .cvt:disabled{background:#252530;color:#555568;cursor:not-allowed}
@@ -65,25 +62,22 @@ label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
 </head>
 <body>
 <h1>Sensor Log Converter</h1>
-<div class="sub">// .bin &rarr; .csv &nbsp;|&nbsp; merge uptime + UTC</div>
+<div class="sub">// .bin &rarr; .csv &nbsp;|&nbsp; boot archive + UTC upload files</div>
 
 <label class="dropzone" id="dz" for="fi">
   <div class="di">&#128225;</div>
   <div class="dt">Click to browse or drop .bin files here</div>
   <div class="ds">
-    UTC files: <span>bme280.bin</span> <span>ens160.bin</span> <span>as7343.bin</span> <span>moisture.bin</span> <span>sound.bin</span><br>
-    Uptime files: <span>bme####.bin</span> <span>ens####.bin</span> <span>as7####.bin</span> <span>mst####.bin</span> <span>snd####.bin</span>
+    UTC upload files: <span>bme280.bin</span> <span>ens160.bin</span> <span>as7343.bin</span> <span>moisture.bin</span> <span>sound.bin</span><br>
+    Boot archive files: <span>BMEnnnn.BIN</span> <span>ENSnnnn.BIN</span> <span>AS7nnnn.BIN</span> <span>MSTnnnn.BIN</span> <span>SNDnnnn.BIN</span>
   </div>
 </label>
 <input type="file" id="fi" multiple style="display:none">
 
 <div class="files" id="fl"></div>
 
-<!-- Merge panel — shown when uptime + UTC pair detected -->
 <div class="merge-panel" id="mp">
-  <div class="merge-title">&#9889; Uptime &rarr; UTC Merge Detected</div>
-
-  <!-- Input mode toggle -->
+  <div class="merge-title">&#9889; Boot archive + UTC upload merge detected</div>
   <div class="merge-row" style="margin-bottom:14px">
     <label>Offset input mode:</label>
     <div class="toggle-group">
@@ -91,15 +85,11 @@ label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
       <button class="toggle-btn" id="modeDt" onclick="setMode('datetime')">Date &amp; time</button>
     </div>
   </div>
-
-  <!-- Unix seconds input -->
   <div class="merge-row" id="rowUnix">
     <label>UTC at boot (seconds):</label>
     <input type="number" class="merge-input" id="offsetUnix" placeholder="e.g. 1776135432" step="1">
-    <span class="merge-hint">Unix timestamp corresponding to uptime=0 on the sensor node</span>
+    <span class="merge-hint">Unix timestamp at uptime=0 — only needed for pre-sync records without utc_sec</span>
   </div>
-
-  <!-- Datetime input -->
   <div class="merge-row" id="rowDt" style="display:none;flex-wrap:wrap;gap:8px">
     <label style="width:100%">UTC boot time:</label>
     <input type="number" class="merge-input-sm" id="dtDay"   placeholder="DD"   min="1"  max="31"  style="width:56px">
@@ -110,13 +100,10 @@ label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
     <input type="number" class="merge-input-sm" id="dtSec"   placeholder="SS"   min="0"  max="59"  style="width:56px">
     <span class="merge-hint" style="width:100%">Day / Month / Year &nbsp; Hour : Minute : Second (UTC)</span>
   </div>
-
-  <!-- Resolved preview -->
   <div class="merge-row" id="offsetPreview" style="margin-top:4px;display:none">
     <span style="font-family:'Syne Mono',monospace;font-size:11px;color:#555568">Resolved: </span>
     <span style="font-family:'Syne Mono',monospace;font-size:11px;color:#7fff6e" id="offsetResolved"></span>
   </div>
-
   <div class="merge-pairs" id="mergePairs"></div>
 </div>
 
@@ -124,243 +111,385 @@ label.dropzone.over{border-color:#7fff6e;background:#7fff6e10}
 <div class="log" id="lg"></div>
 
 <script>
-// ── Parser definitions ────────────────────────────────────────────────────
+// ── Record format (all files) ─────────────────────────────────────────────
 //
-// Naming conventions:
-//   UTC files:    bme280.bin, ens160.bin, as7343.bin, moisture.bin, sound.bin
-//   Uptime files: bme####.bin, ens####.bin, as7####.bin, mst####.bin, snd####.bin
+// Every record is: [ struct bytes ][ CRC32 little-endian (4 bytes) ]
+// CRC is verified on parse — corrupt records are skipped with a warning.
 //
-// Struct sizes (with C alignment padding):
-//   bme280:   32 bytes  (double×3 + uint32 + uint16 + 2pad)
-//   ens160:   20 bytes  (int32×3 + uint32 + uint16 + 2pad)
-//   as7343:   36 bytes  (uint16×13 + 2pad + uint32 + uint16 + 2pad)
-//   moisture: 12 bytes  (uint16 + 2pad + uint32 + uint16 + 2pad)
-//   sound:   704 bytes  (uint32 + uint16 + int16 + uint16×348)
-//   sound old: 702 bytes (uint32 + int16 + uint16×348 — no utc_ms)
+// Struct layouts (explicit padding, = {0} zeroed at write time):
+//
+//   bme280   40 bytes + 4 CRC = 44 bytes/record
+//     offset  0: float64 temp_c
+//     offset  8: float64 rh_pct
+//     offset 16: float64 press_hPa
+//     offset 24: uint32  utc_sec
+//     offset 28: uint16  utc_ms
+//     offset 30: uint16  _pad
+//     offset 32: uint64  uptime_ms
+//
+//   ens160   32 bytes + 4 CRC = 36 bytes/record
+//     offset  0: int32   eco2_ppm
+//     offset  4: int32   tvoc_ppb
+//     offset  8: int32   aqi
+//     offset 12: uint32  utc_sec
+//     offset 16: uint16  utc_ms
+//     offset 18: uint16  _pad
+//     offset 20: uint32  _pad2
+//     offset 24: uint64  uptime_ms
+//
+//   as7343   56 bytes + 4 CRC = 60 bytes/record  (AS7343_NUM_CH = 18)
+//     offset  0: uint16[18] ch
+//     offset 36: uint16  utc_ms
+//     offset 38: uint16  _pad
+//     offset 40: uint32  utc_sec
+//     offset 44: uint32  _pad2
+//     offset 48: uint64  uptime_ms
+//
+//   moisture 16 bytes + 4 CRC = 20 bytes/record
+//     offset  0: uint16  vwc_x100
+//     offset  2: uint16  utc_ms
+//     offset  4: uint32  utc_sec
+//     offset  8: uint64  uptime_ms
+//
+//   sound   712 bytes + 4 CRC = 716 bytes/record  (SOUND_NUM_BINS = 348)
+//     offset  0: uint32  utc_sec
+//     offset  4: uint16  utc_ms
+//     offset  6: int16   rms_dbfs_x100
+//     offset  8: uint64  uptime_ms
+//     offset 16: uint16[348] bins
+//       bin encoding: stored = (db + 120.0) * 100  →  recover: db = (stored / 100.0) - 120.0
+//       range: 0 = -120.0 dBFS, 12000 = 0.0 dBFS, 65535 = +535.35 dBFS (clipped)
+//
+// UTC upload files: bme280.bin, ens160.bin, as7343.bin, moisture.bin, sound.bin
+// Boot archive files: BMEnnnn.BIN, ENSnnnn.BIN, AS7nnnn.BIN, MSTnnnn.BIN, SNDnnnn.BIN
+//   Boot archives contain utc_sec=0 for pre-sync records; uptime_ms is
+//   always valid and can be used to align records when utc_sec is 0.
 
 const UTC_MIN = 1700000000;
+const AS7_NUM_CH = 18;
+const SOUND_NUM_BINS = 348;
 
+// ── CRC32 ─────────────────────────────────────────────────────────────────
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+function crc32(buf, offset, len) {
+  let crc = 0xFFFFFFFF;
+  const u8 = new Uint8Array(buf, offset, len);
+  for (let i = 0; i < len; i++) crc = CRC32_TABLE[(crc ^ u8[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function verifyCrc(buf, recOffset, structLen) {
+  const stored = new DataView(buf).getUint32(recOffset + structLen, true);
+  const computed = crc32(buf, recOffset, structLen);
+  return stored === computed;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
 function fmtDt(s, ms) {
   if (s > UTC_MIN) {
     return new Date((s + ms/1000)*1000).toISOString().replace('T',' ').replace('Z','').slice(0,23);
   }
-  if (s > 0) {
-    return 'unsynced(' + s + '.' + String(ms).padStart(3,'0') + ')';
-  }
+  if (s > 0) return 'unsynced(' + s + '.' + String(ms).padStart(3,'0') + ')';
   return 'unsynced';
 }
 
-// Apply UTC offset to a record: utc_sec = uptime_sec + offset
-function applyOffset(rec, offsetSec) {
-  const newSec = rec.s + Math.floor(offsetSec);
-  const newMs  = rec.ms; // ms part stays the same
-  return Object.assign({}, rec, { s: newSec, ms: newMs });
+// Read uint64 as a JS number (safe up to 2^53 — ~285 years of ms)
+function getUint64(dv, offset) {
+  const lo = dv.getUint32(offset, true);
+  const hi = dv.getUint32(offset + 4, true);
+  return hi * 0x100000000 + lo;
 }
 
+// Apply UTC offset to a pre-sync record using uptime_ms
+// offsetSec: UTC seconds corresponding to uptime=0
+function applyOffset(rec, offsetSec) {
+  if (rec.s > UTC_MIN) return rec; // already has valid UTC — don't overwrite
+  const totalMs = rec.uptime_ms + Math.round(offsetSec * 1000);
+  return Object.assign({}, rec, {
+    s:  Math.floor(totalMs / 1000),
+    ms: totalMs % 1000
+  });
+}
+
+// ── Modality definitions ──────────────────────────────────────────────────
 const MODALITIES = {
   bme: {
-    label:'bme280', cls:'b0', recSz:32,
+    label:'bme280', cls:'b0',
+    structSz: 40, recSz: 44,
     utcName: 'bme280.bin',
-    uptPattern: /^bme\d+\.bin$/,
+    bootPattern: /^bme[0-9]{4}\.bin$/i,
     parse(b) {
-      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/32);
-      for(let i=0;i<N;i++){
-        const o=i*32;
+      const d = new DataView(b), r = [], N = Math.floor(b.byteLength / 44);
+      let corrupt = 0;
+      for (let i = 0; i < N; i++) {
+        const o = i * 44;
+        if (!verifyCrc(b, o, 40)) { corrupt++; continue; }
         r.push({
-          temp: d.getFloat64(o,true),
-          rh:   d.getFloat64(o+8,true),
-          press:d.getFloat64(o+16,true),
-          s:    d.getUint32(o+24,true),
-          ms:   d.getUint16(o+28,true)
+          temp:     d.getFloat64(o,    true),
+          rh:       d.getFloat64(o+8,  true),
+          press:    d.getFloat64(o+16, true),
+          s:        d.getUint32(o+24,  true),
+          ms:       d.getUint16(o+28,  true),
+          uptime_ms:getUint64(d, o+32)
         });
       }
+      if (corrupt) logLine('bme280: ' + corrupt + ' corrupt record(s) skipped', 'er');
       return r;
     },
     csv(rows) {
-      const l=['datetime,utc_sec,utc_ms,temp_c,rh_pct,press_hPa'];
-      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.temp.toFixed(2),x.rh.toFixed(2),x.press.toFixed(3)].join(',')));
+      const l = ['datetime,utc_sec,utc_ms,uptime_ms,temp_c,rh_pct,press_hPa'];
+      rows.forEach(x => l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.uptime_ms,x.temp.toFixed(2),x.rh.toFixed(2),x.press.toFixed(3)].join(',')));
       return l.join('\n');
     },
     bin(rows) {
-      const buf=new ArrayBuffer(rows.length*32), d=new DataView(buf);
-      rows.forEach((x,i)=>{
-        const o=i*32;
-        d.setFloat64(o,   x.temp, true);
-        d.setFloat64(o+8, x.rh,   true);
-        d.setFloat64(o+16,x.press,true);
-        d.setUint32(o+24, x.s,    true);
-        d.setUint16(o+28, x.ms,   true);
+      const buf = new ArrayBuffer(rows.length * 44), d = new DataView(buf);
+      rows.forEach((x, i) => {
+        const o = i * 44;
+        d.setFloat64(o,    x.temp,  true);
+        d.setFloat64(o+8,  x.rh,    true);
+        d.setFloat64(o+16, x.press, true);
+        d.setUint32(o+24,  x.s,     true);
+        d.setUint16(o+28,  x.ms,    true);
+        // o+30: _pad = 0
+        // o+32: uptime_ms uint64 LE
+        d.setUint32(o+32, x.uptime_ms & 0xFFFFFFFF,        true);
+        d.setUint32(o+36, Math.floor(x.uptime_ms / 0x100000000), true);
+        const crc = crc32(buf, o, 40);
+        d.setUint32(o+40, crc, true);
       });
       return buf;
     }
   },
+
   ens: {
-    label:'ens160', cls:'b1', recSz:20,
+    label:'ens160', cls:'b1',
+    structSz: 32, recSz: 36,
     utcName: 'ens160.bin',
-    uptPattern: /^ens\d+\.bin$/,
+    bootPattern: /^ens[0-9]{4}\.bin$/i,
     parse(b) {
-      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/20);
-      for(let i=0;i<N;i++){
-        const o=i*20;
+      const d = new DataView(b), r = [], N = Math.floor(b.byteLength / 36);
+      let corrupt = 0;
+      for (let i = 0; i < N; i++) {
+        const o = i * 36;
+        if (!verifyCrc(b, o, 32)) { corrupt++; continue; }
         r.push({
-          eco2:d.getInt32(o,true),
-          tvoc:d.getInt32(o+4,true),
-          aqi: d.getInt32(o+8,true),
-          s:   d.getUint32(o+12,true),
-          ms:  d.getUint16(o+16,true)
+          eco2:     d.getInt32(o,    true),
+          tvoc:     d.getInt32(o+4,  true),
+          aqi:      d.getInt32(o+8,  true),
+          s:        d.getUint32(o+12,true),
+          ms:       d.getUint16(o+16,true),
+          uptime_ms:getUint64(d, o+24)
         });
       }
+      if (corrupt) logLine('ens160: ' + corrupt + ' corrupt record(s) skipped', 'er');
       return r;
     },
     csv(rows) {
-      const l=['datetime,utc_sec,utc_ms,eco2_ppm,tvoc_ppb,aqi'];
-      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.eco2,x.tvoc,x.aqi].join(',')));
+      const l = ['datetime,utc_sec,utc_ms,uptime_ms,eco2_ppm,tvoc_ppb,aqi'];
+      rows.forEach(x => l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.uptime_ms,x.eco2,x.tvoc,x.aqi].join(',')));
       return l.join('\n');
     },
     bin(rows) {
-      const buf=new ArrayBuffer(rows.length*20), d=new DataView(buf);
-      rows.forEach((x,i)=>{
-        const o=i*20;
-        d.setInt32(o,   x.eco2,true);
-        d.setInt32(o+4, x.tvoc,true);
-        d.setInt32(o+8, x.aqi, true);
-        d.setUint32(o+12,x.s,  true);
-        d.setUint16(o+16,x.ms, true);
+      const buf = new ArrayBuffer(rows.length * 36), d = new DataView(buf);
+      rows.forEach((x, i) => {
+        const o = i * 36;
+        d.setInt32(o,    x.eco2, true);
+        d.setInt32(o+4,  x.tvoc, true);
+        d.setInt32(o+8,  x.aqi,  true);
+        d.setUint32(o+12,x.s,    true);
+        d.setUint16(o+16,x.ms,   true);
+        // o+18: _pad, o+20: _pad2 = 0
+        d.setUint32(o+24, x.uptime_ms & 0xFFFFFFFF,             true);
+        d.setUint32(o+28, Math.floor(x.uptime_ms / 0x100000000),true);
+        d.setUint32(o+32, crc32(buf, o, 32), true);
       });
       return buf;
     }
   },
+
   as7: {
-    label:'as7343', cls:'b2', recSz:36,
+    label:'as7343', cls:'b2',
+    structSz: 56, recSz: 60,
     utcName: 'as7343.bin',
-    uptPattern: /^as7\d+\.bin$/,
+    bootPattern: /^as7[0-9]{4}\.bin$/i,
     parse(b) {
-      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/36);
-      for(let i=0;i<N;i++){
-        const o=i*36, ch=[];
-        for(let c=0;c<13;c++) ch.push(d.getUint16(o+c*2,true));
-        r.push({ ch, s:d.getUint32(o+28,true), ms:d.getUint16(o+32,true) });
+      const d = new DataView(b), r = [], N = Math.floor(b.byteLength / 60);
+      let corrupt = 0;
+      for (let i = 0; i < N; i++) {
+        const o = i * 60;
+        if (!verifyCrc(b, o, 56)) { corrupt++; continue; }
+        const ch = [];
+        for (let c = 0; c < AS7_NUM_CH; c++) ch.push(d.getUint16(o + c*2, true));
+        r.push({
+          ch,
+          ms:       d.getUint16(o+36, true),
+          s:        d.getUint32(o+40, true),
+          uptime_ms:getUint64(d, o+48)
+        });
       }
+      if (corrupt) logLine('as7343: ' + corrupt + ' corrupt record(s) skipped', 'er');
       return r;
     },
     csv(rows) {
-      const wl='405nm,425nm,450nm,475nm,515nm,550nm,555nm,600nm,640nm,690nm,745nm,855nm,visible';
-      const l=[`datetime,utc_sec,utc_ms,${wl}`];
-      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,...x.ch].join(',')));
+      const wl = 'ch0,ch1,ch2,ch3,ch4,ch5,ch6,ch7,ch8,ch9,ch10,ch11,ch12,ch13,ch14,ch15,ch16,ch17';
+      const l = [`datetime,utc_sec,utc_ms,uptime_ms,${wl}`];
+      rows.forEach(x => l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.uptime_ms,...x.ch].join(',')));
       return l.join('\n');
     },
     bin(rows) {
-      const buf=new ArrayBuffer(rows.length*36), d=new DataView(buf);
-      rows.forEach((x,i)=>{
-        const o=i*36;
-        for(let c=0;c<13;c++) d.setUint16(o+c*2,x.ch[c],true);
-        // 2 bytes padding at o+26
-        d.setUint32(o+28,x.s, true);
-        d.setUint16(o+32,x.ms,true);
+      const buf = new ArrayBuffer(rows.length * 60), d = new DataView(buf);
+      rows.forEach((x, i) => {
+        const o = i * 60;
+        for (let c = 0; c < AS7_NUM_CH; c++) d.setUint16(o + c*2, x.ch[c], true);
+        d.setUint16(o+36, x.ms, true);
+        // o+38: _pad = 0
+        d.setUint32(o+40, x.s,  true);
+        // o+44: _pad2 = 0
+        d.setUint32(o+48, x.uptime_ms & 0xFFFFFFFF,             true);
+        d.setUint32(o+52, Math.floor(x.uptime_ms / 0x100000000),true);
+        d.setUint32(o+56, crc32(buf, o, 56), true);
       });
       return buf;
     }
   },
+
   mst: {
-    label:'moisture', cls:'b3', recSz:12,
+    label:'moisture', cls:'b3',
+    structSz: 16, recSz: 20,
     utcName: 'moisture.bin',
-    uptPattern: /^mst\d+\.bin$/,
+    bootPattern: /^mst[0-9]{4}\.bin$/i,
     parse(b) {
-      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/12);
-      for(let i=0;i<N;i++){
-        const o=i*12;
-        r.push({ vwc:d.getUint16(o,true)/100, s:d.getUint32(o+4,true), ms:d.getUint16(o+8,true) });
+      const d = new DataView(b), r = [], N = Math.floor(b.byteLength / 20);
+      let corrupt = 0;
+      for (let i = 0; i < N; i++) {
+        const o = i * 20;
+        if (!verifyCrc(b, o, 16)) { corrupt++; continue; }
+        r.push({
+          vwc:      d.getUint16(o,   true) / 100,
+          ms:       d.getUint16(o+2, true),
+          s:        d.getUint32(o+4, true),
+          uptime_ms:getUint64(d, o+8)
+        });
       }
+      if (corrupt) logLine('moisture: ' + corrupt + ' corrupt record(s) skipped', 'er');
       return r;
     },
     csv(rows) {
-      const l=['datetime,utc_sec,utc_ms,vwc_percent'];
-      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.vwc.toFixed(2)].join(',')));
+      const l = ['datetime,utc_sec,utc_ms,uptime_ms,vwc_percent'];
+      rows.forEach(x => l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.uptime_ms,x.vwc.toFixed(2)].join(',')));
       return l.join('\n');
     },
     bin(rows) {
-      const buf=new ArrayBuffer(rows.length*12), d=new DataView(buf);
-      rows.forEach((x,i)=>{
-        const o=i*12;
-        d.setUint16(o,   Math.round(x.vwc*100), true);
-        // 2 bytes padding at o+2
+      const buf = new ArrayBuffer(rows.length * 20), d = new DataView(buf);
+      rows.forEach((x, i) => {
+        const o = i * 20;
+        d.setUint16(o,   Math.round(x.vwc * 100), true);
+        d.setUint16(o+2, x.ms, true);
         d.setUint32(o+4, x.s,  true);
-        d.setUint16(o+8, x.ms, true);
+        d.setUint32(o+8,  x.uptime_ms & 0xFFFFFFFF,             true);
+        d.setUint32(o+12, Math.floor(x.uptime_ms / 0x100000000),true);
+        d.setUint32(o+16, crc32(buf, o, 16), true);
       });
       return buf;
     }
   },
+
   snd: {
     label:'sound', cls:'b4',
+    structSz: 712, recSz: 716,
     utcName: 'sound.bin',
-    uptPattern: /^snd\d+\.bin$/,
-    // auto-detect 702 (old, no utc_ms) vs 704 (new)
-    getRecSz(sz) { return sz%704===0 ? 704 : sz%702===0 ? 702 : null; },
-    get recSz() { return 704; },
+    bootPattern: /^snd[0-9]{4}\.bin$/i,
+    // Two possible record sizes:
+    //   708 bytes = 712 struct (no uptime_ms) + 4 CRC  — firmware not yet updated
+    //   716 bytes = 712 struct (with uptime_ms at o+8) + 4 CRC — updated firmware
     parse(b) {
-      const sz = b.byteLength%704===0 ? 704 : 702;
-      const d=new DataView(b), r=[], N=Math.floor(b.byteLength/sz);
-      for(let i=0;i<N;i++){
-        const o=i*sz;
-        let s,ms,rms,boff;
-        if(sz===704){ s=d.getUint32(o,true); ms=d.getUint16(o+4,true); rms=d.getInt16(o+6,true)/100; boff=o+8; }
-        else         { s=d.getUint32(o,true); ms=0;                      rms=d.getInt16(o+4,true)/100; boff=o+6; }
-        const bins=[];
-        for(let j=0;j<348;j++) bins.push(d.getUint16(boff+j*2,true));
-        r.push({s,ms,rms,bins});
+      // Auto-detect whether uptime_ms is present based on file size
+      const hasUptime = (b.byteLength % 716 === 0);
+      const recSz     = hasUptime ? 716 : 708;
+      const structSz  = hasUptime ? 712 : 704;
+      const d = new DataView(b), r = [], N = Math.floor(b.byteLength / recSz);
+      let corrupt = 0;
+      for (let i = 0; i < N; i++) {
+        const o = i * recSz;
+        if (!verifyCrc(b, o, structSz)) { corrupt++; continue; }
+        const bins = [];
+        const binOff = hasUptime ? o + 16 : o + 8;
+        for (let j = 0; j < SOUND_NUM_BINS; j++) bins.push(d.getUint16(binOff + j*2, true));
+        r.push({
+          s:        d.getUint32(o,   true),
+          ms:       d.getUint16(o+4, true),
+          rms:      d.getInt16(o+6,  true) / 100,
+          uptime_ms:hasUptime ? getUint64(d, o+8) : 0,
+          bins
+        });
       }
+      if (corrupt) logLine('sound: ' + corrupt + ' corrupt record(s) skipped', 'er');
+      if (!hasUptime) logLine('sound: no uptime_ms field detected (old firmware layout) — uptime will be 0', 'mg');
       return r;
     },
     csv(rows) {
-      const bh=Array.from({length:348},(_,i)=>`bin${i+1}_${Math.round((i+1)*43.1)}hz`).join(',');
-      const l=[`datetime,utc_sec,utc_ms,rms_dbfs,${bh}`];
-      rows.forEach(x=>l.push([fmtDt(x.s,x.ms),x.s,x.ms,x.rms.toFixed(2),...x.bins.map(v=>(v/10).toFixed(1))].join(',')));
+      // bins are encoded as uint16: stored = (db + 120.0) * 100
+      // recover: db = (stored / 100.0) (+120 converts to SPL)
+      // Update header label from _dbfs to _dbspl:
+      const bh = Array.from({length:SOUND_NUM_BINS}, (_,i) => 
+          `bin${i+1}_${Math.round((i+1)*43.1)}hz_dbspl`).join(',');
+      const l = [`datetime,utc_sec,utc_ms,uptime_ms,rms_dbfs,${bh}`];
+      rows.forEach(x => l.push([
+        fmtDt(x.s,x.ms), x.s, x.ms, x.uptime_ms, x.rms.toFixed(2),
+        ...x.bins.map(v => (v / 100.0).toFixed(2))
+      ].join(',')));
       return l.join('\n');
     },
     bin(rows) {
-      const buf=new ArrayBuffer(rows.length*704), d=new DataView(buf);
-      rows.forEach((x,i)=>{
-        const o=i*704;
+      const buf = new ArrayBuffer(rows.length * 716), d = new DataView(buf);
+      rows.forEach((x, i) => {
+        const o = i * 716;
         d.setUint32(o,   x.s,  true);
         d.setUint16(o+4, x.ms, true);
-        d.setInt16(o+6,  Math.round(x.rms*100), true);
-        for(let j=0;j<348;j++) d.setUint16(o+8+j*2, x.bins[j], true);
+        d.setInt16(o+6,  Math.round(x.rms * 100), true);
+        d.setUint32(o+8,  x.uptime_ms & 0xFFFFFFFF,             true);
+        d.setUint32(o+12, Math.floor(x.uptime_ms / 0x100000000),true);
+        for (let j = 0; j < SOUND_NUM_BINS; j++) d.setUint16(o+16+j*2, x.bins[j], true);
+        d.setUint32(o+712, crc32(buf, o, 712), true);
       });
       return buf;
     }
   }
 };
 
-// Build lookup: filename → {modality, isUtc, isUpt}
+// ── File classification ───────────────────────────────────────────────────
 function classifyName(name) {
+  const lower = name.toLowerCase();
   for (const [key, m] of Object.entries(MODALITIES)) {
-    if (name === m.utcName) return { mod: key, isUtc: true,  isUpt: false };
-    if (m.uptPattern.test(name)) return { mod: key, isUtc: false, isUpt: true  };
+    if (lower === m.utcName)              return { mod:key, isUtc:true,  isBoot:false };
+    if (m.bootPattern.test(lower))        return { mod:key, isUtc:false, isBoot:true  };
   }
   return null;
 }
 
-function getRecSz(key, fileSize) {
-  const m = MODALITIES[key];
-  if (key === 'snd') {
-    return fileSize%704===0 ? 704 : fileSize%702===0 ? 702 : null;
-  }
-  return fileSize % m.recSz === 0 ? m.recSz : null;
-}
+function getRecSz(key) { return MODALITIES[key].recSz; }
 
 // ── State ─────────────────────────────────────────────────────────────────
-const fileMap = new Map(); // name → { file, cls, modKey, isUtc, isUpt, recSz, recs }
-
+const fileMap = new Map();
 const dz  = document.getElementById('dz');
 const fi  = document.getElementById('fi');
 const fl  = document.getElementById('fl');
 const cb  = document.getElementById('cb');
 const lg  = document.getElementById('lg');
 const mp  = document.getElementById('mp');
-const mergePairs  = document.getElementById('mergePairs');
+const mergePairs = document.getElementById('mergePairs');
 
 fi.addEventListener('change', function() {
-  if (this.files && this.files.length > 0) { processFiles(Array.from(this.files)); }
+  if (this.files && this.files.length > 0) processFiles(Array.from(this.files));
   this.value = '';
 });
 dz.addEventListener('dragenter', e => { e.preventDefault(); dz.classList.add('over'); });
@@ -375,18 +504,12 @@ function processFiles(list) {
     if (!name.endsWith('.bin')) return;
     const cls = classifyName(name);
     if (!cls) {
-      fileMap.set(name, { file:f, modKey:null, isUtc:false, isUpt:false, recs:'?', err:'unrecognised' });
+      fileMap.set(name, { file:f, modKey:null, isUtc:false, isBoot:false, recs:'?', err:'unrecognised' });
       return;
     }
-    const recSz = getRecSz(cls.mod, f.size);
-    if (!recSz) {
-      fileMap.set(name, { file:f, modKey:cls.mod, isUtc:cls.isUtc, isUpt:cls.isUpt, recs:'?', err:'unrecognised size' });
-      return;
-    }
-    fileMap.set(name, {
-      file:f, modKey:cls.mod, isUtc:cls.isUtc, isUpt:cls.isUpt,
-      recSz, recs: Math.floor(f.size/recSz), err:null
-    });
+    const recSz = getRecSz(cls.mod);
+    const recs  = Math.floor(f.size / recSz);
+    fileMap.set(name, { file:f, modKey:cls.mod, isUtc:cls.isUtc, isBoot:cls.isBoot, recSz, recs, err:null });
   });
   render();
   updateMergePanel();
@@ -399,13 +522,14 @@ function render() {
   fileMap.forEach((info, name) => {
     const m = info.modKey ? MODALITIES[info.modKey] : null;
     const known = m && !info.err;
-    const tag = info.isUtc ? 'UTC' : info.isUpt ? 'UPT' : '';
+    const tag = info.isUtc ? 'UTC' : info.isBoot ? 'BOOT' : '';
+    const tagColor = info.isUtc ? '#7fff6e' : '#6eb8ff';
     const div = document.createElement('div');
     div.className = 'fc';
     div.innerHTML = `
       <span class="badge ${known ? m.cls : 'bx'}">${known ? m.label : 'unknown'}</span>
       <div class="fi2">
-        <div class="fn">${name} ${tag ? '<span style="font-size:10px;color:'+(info.isUtc?'#7fff6e':'#6eb8ff')+'">['+ tag +']</span>' : ''}</div>
+        <div class="fn">${name} ${tag ? `<span style="font-size:10px;color:${tagColor}">[${tag}]</span>` : ''}</div>
         <div class="fm">${(info.file.size/1024).toFixed(1)} KB &nbsp;&middot;&nbsp; ${known ? info.recSz+'b/rec' : info.err||'?'}</div>
       </div>
       <span class="fs ${known?'':'u'}">${known ? info.recs+' records' : '?'}</span>
@@ -417,30 +541,25 @@ function render() {
   cb.disabled = fileMap.size === 0;
 }
 
-// Find UTC+UPT pairs for the merge panel
+// Find BOOT+UTC pairs for the merge panel
 function findPairs() {
   const pairs = [];
-  const utcFiles = new Map();
-  const uptFiles = new Map();
+  const utcFiles  = new Map();
+  const bootFiles = new Map();
   fileMap.forEach((info, name) => {
     if (!info.modKey || info.err) return;
-    if (info.isUtc) utcFiles.set(info.modKey, name);
-    if (info.isUpt) uptFiles.set(info.modKey, name);
+    if (info.isUtc)  utcFiles.set(info.modKey, name);
+    if (info.isBoot) bootFiles.set(info.modKey, name);
   });
   utcFiles.forEach((utcName, mod) => {
-    if (uptFiles.has(mod)) {
-      pairs.push({ mod, utcName, uptName: uptFiles.get(mod) });
-    }
+    if (bootFiles.has(mod)) pairs.push({ mod, utcName, bootName: bootFiles.get(mod) });
   });
   return pairs;
 }
 
 function updateMergePanel() {
   const pairs = findPairs();
-  if (pairs.length === 0) {
-    mp.classList.remove('visible');
-    return;
-  }
+  if (pairs.length === 0) { mp.classList.remove('visible'); return; }
   mp.classList.add('visible');
   mergePairs.innerHTML = '';
   pairs.forEach(p => {
@@ -451,7 +570,7 @@ function updateMergePanel() {
       <span class="badge ${m.cls}">${m.label}</span>
       <span class="pair-utc">${p.utcName}</span>
       <span class="pair-plus">+</span>
-      <span class="pair-upt">${p.uptName}</span>
+      <span class="pair-upt">${p.bootName}</span>
       <span class="pair-arrow">&rarr;</span>
       <span class="pair-out">${p.utcName.replace('.bin','_merged.csv')}</span>
     `;
@@ -459,18 +578,7 @@ function updateMergePanel() {
   });
 }
 
-// ── Log ───────────────────────────────────────────────────────────────────
-function logLine(msg, cls='') {
-  lg.style.display = 'block';
-  const d = document.createElement('div');
-  d.className = 'll ' + cls;
-  d.textContent = '[' + new Date().toTimeString().slice(0,8) + '] ' + msg;
-  lg.appendChild(d);
-  lg.scrollTop = lg.scrollHeight;
-}
-
-// ── Download ──────────────────────────────────────────────────────────────
-// ── Offset input mode ────────────────────────────────────────────────────
+// ── Offset input ──────────────────────────────────────────────────────────
 let currentMode = 'unix';
 
 function setMode(mode) {
@@ -485,42 +593,39 @@ function setMode(mode) {
 function getOffsetSec() {
   if (currentMode === 'unix') {
     return parseFloat(document.getElementById('offsetUnix').value) || 0;
-  } else {
-    const day   = parseInt(document.getElementById('dtDay').value)   || 0;
-    const month = parseInt(document.getElementById('dtMonth').value) || 0;
-    const year  = parseInt(document.getElementById('dtYear').value)  || 0;
-    const hour  = parseInt(document.getElementById('dtHour').value)  || 0;
-    const min   = parseInt(document.getElementById('dtMin').value)   || 0;
-    const sec   = parseInt(document.getElementById('dtSec').value)   || 0;
-    if (!day || !month || !year) return 0;
-    return Date.UTC(year, month-1, day, hour, min, sec) / 1000;
   }
+  const day   = parseInt(document.getElementById('dtDay').value)   || 0;
+  const month = parseInt(document.getElementById('dtMonth').value) || 0;
+  const year  = parseInt(document.getElementById('dtYear').value)  || 0;
+  const hour  = parseInt(document.getElementById('dtHour').value)  || 0;
+  const min   = parseInt(document.getElementById('dtMin').value)   || 0;
+  const sec   = parseInt(document.getElementById('dtSec').value)   || 0;
+  if (!day || !month || !year) return 0;
+  return Date.UTC(year, month-1, day, hour, min, sec) / 1000;
 }
 
 function updatePreview() {
   const sec = getOffsetSec();
-  const preview = document.getElementById('offsetPreview');
+  const preview  = document.getElementById('offsetPreview');
   const resolved = document.getElementById('offsetResolved');
   if (sec > UTC_MIN) {
-    const d = new Date(sec*1000);
-    resolved.textContent = sec + 's  →  ' + d.toISOString().replace('T',' ').replace('Z','') + ' UTC';
+    resolved.textContent = sec + 's  →  ' + new Date(sec*1000).toISOString().replace('T',' ').replace('Z','') + ' UTC';
     preview.style.display = 'flex';
   } else {
     preview.style.display = 'none';
   }
 }
 
-// Listen for changes on all offset inputs
 ['offsetUnix','dtDay','dtMonth','dtYear','dtHour','dtMin','dtSec'].forEach(id => {
   document.getElementById(id).addEventListener('input', updatePreview);
 });
 
+// ── Download helpers ──────────────────────────────────────────────────────
 function download(filename, csv) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
   a.download = filename;
-  document.body.appendChild(a);
-  a.click();
+  document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 200);
 }
 
@@ -528,8 +633,7 @@ function downloadBin(filename, arrayBuffer) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([arrayBuffer], {type:'application/octet-stream'}));
   a.download = filename;
-  document.body.appendChild(a);
-  a.click();
+  document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 200);
 }
 
@@ -537,51 +641,55 @@ function downloadBin(filename, arrayBuffer) {
 async function doConvert() {
   lg.innerHTML = '';
   lg.style.display = 'block';
-  let ok=0, err=0;
+  let ok = 0, err = 0;
 
   const pairs = findPairs();
   const mergedMods = new Set(pairs.map(p => p.mod));
-  const offsetSec = getOffsetSec();
-  const hasOffset = offsetSec > UTC_MIN;
+  const offsetSec  = getOffsetSec();
+  const hasOffset  = offsetSec > UTC_MIN;
 
-  // ── Step 1: handle merges first ──────────────────────────────────────
+  // Step 1: handle merges
   for (const pair of pairs) {
-    if (!hasOffset) {
-      logLine('SKIP merge ' + pair.utcName + ' — no UTC offset entered', 'er');
-      err++;
-      continue;
-    }
-
     try {
-      const m = MODALITIES[pair.mod];
+      const m       = MODALITIES[pair.mod];
       const utcInfo = fileMap.get(pair.utcName);
-      const uptInfo = fileMap.get(pair.uptName);
+      const bootInfo= fileMap.get(pair.bootName);
 
-      logLine('Merging ' + pair.uptName + ' into ' + pair.utcName + '...', 'mg');
+      logLine('Merging ' + pair.bootName + ' + ' + pair.utcName + '...', 'mg');
 
-      const utcBuf = await utcInfo.file.arrayBuffer();
-      const uptBuf = await uptInfo.file.arrayBuffer();
+      const utcBuf  = await utcInfo.file.arrayBuffer();
+      const bootBuf = await bootInfo.file.arrayBuffer();
 
-      let utcRows = m.parse(utcBuf);
-      let uptRows = m.parse(uptBuf);
+      let utcRows  = m.parse(utcBuf);
+      let bootRows = m.parse(bootBuf);
 
-      // Apply offset to uptime rows
-      uptRows = uptRows.map(r => applyOffset(r, offsetSec));
+      logLine('Parsed: ' + utcRows.length + ' UTC records, ' + bootRows.length + ' boot records', 'in');
 
-      // Merge and sort by timestamp
-      const merged = [...utcRows, ...uptRows].sort((a,b) => {
-        const ta = a.s + a.ms/1000;
-        const tb = b.s + b.ms/1000;
-        return ta - tb;
+      // Apply offset to boot records that lack UTC sync (utc_sec == 0)
+      if (hasOffset) {
+        const before = bootRows.filter(r => r.s <= UTC_MIN).length;
+        bootRows = bootRows.map(r => applyOffset(r, offsetSec));
+        if (before > 0) logLine('Applied offset to ' + before + ' pre-sync boot records', 'mg');
+      } else {
+        const unsynced = bootRows.filter(r => r.s <= UTC_MIN).length;
+        if (unsynced > 0) logLine('WARNING: ' + unsynced + ' boot records have no UTC — enter boot offset above to align them', 'er');
+      }
+
+      // Deduplicate: boot records whose utc_sec matches a UTC record within 1s are dropped
+      const utcTimes = new Set(utcRows.map(r => r.s));
+      const uniqueBoot = bootRows.filter(r => !utcTimes.has(r.s));
+      logLine('After dedup: ' + uniqueBoot.length + ' unique boot records added', 'ok');
+
+      const merged = [...utcRows, ...uniqueBoot].sort((a,b) => {
+        return (a.s + a.ms/1000) - (b.s + b.ms/1000);
       });
 
-      logLine('Merged: ' + utcRows.length + ' UTC + ' + uptRows.length + ' uptime = ' + merged.length + ' total', 'ok');
+      logLine('Total merged: ' + merged.length + ' records', 'ok');
 
       const outName = pair.utcName.replace('.bin', '_merged.csv');
       download(outName, m.csv(merged));
       logLine('Downloaded ' + outName, 'ok');
 
-      // Also download merged .bin with corrected UTC timestamps
       const binName = pair.utcName.replace('.bin', '_merged.bin');
       downloadBin(binName, m.bin(merged));
       logLine('Downloaded ' + binName, 'ok');
@@ -592,28 +700,23 @@ async function doConvert() {
     }
   }
 
-  // ── Step 2: convert remaining files individually ──────────────────────
+  // Step 2: convert remaining files individually
   for (const [name, info] of fileMap) {
-    // Skip files that were part of a merge
-    if (info.modKey && mergedMods.has(info.modKey) && (info.isUtc || info.isUpt)) {
-      continue;
-    }
+    if (info.modKey && mergedMods.has(info.modKey) && (info.isUtc || info.isBoot)) continue;
     if (!info.modKey || info.err) {
       logLine('SKIP ' + name + (info.err ? ' — ' + info.err : ''), 'er');
-      err++;
-      continue;
+      err++; continue;
     }
-
     try {
       const m = MODALITIES[info.modKey];
       logLine('Reading ' + name + '...', 'in');
-      const buf  = await info.file.arrayBuffer();
+      const buf = await info.file.arrayBuffer();
       let rows = m.parse(buf);
 
-      // Apply offset if this is an uptime file and offset is provided
-      if (info.isUpt && hasOffset) {
+      if (info.isBoot && hasOffset) {
+        const before = rows.filter(r => r.s <= UTC_MIN).length;
         rows = rows.map(r => applyOffset(r, offsetSec));
-        logLine('Applied UTC offset ' + offsetSec + 's to ' + rows.length + ' records', 'mg');
+        if (before > 0) logLine('Applied UTC offset to ' + before + ' pre-sync records', 'mg');
       }
 
       logLine('Parsed ' + rows.length + ' records', 'ok');
@@ -628,6 +731,15 @@ async function doConvert() {
   }
 
   logLine('Done — ' + ok + ' converted, ' + err + ' errors', ok>0?'ok':'er');
+}
+
+function logLine(msg, cls='') {
+  lg.style.display = 'block';
+  const d = document.createElement('div');
+  d.className = 'll ' + cls;
+  d.textContent = '[' + new Date().toTimeString().slice(0,8) + '] ' + msg;
+  lg.appendChild(d);
+  lg.scrollTop = lg.scrollHeight;
 }
 </script>
 </body>

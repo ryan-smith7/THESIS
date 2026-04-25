@@ -1,14 +1,48 @@
 /**
  * @file sd_log.c
- * @brief SD card offline logging — binary format with UTC/uptime routing.
+ * @brief SD card offline logging — binary format with dual-file targets.
  *
- * UTC-valid records go to constant-named .bin files, replayed on reconnect.
- * Uptime/unsynced records go to boot-numbered _upt_NNNN.bin files, kept for
- * offline analysis only and never replayed over BLE.
+ * Two write targets per modality, selected explicitly by the caller:
+ *
+ *   sd_log_X_boot()   Boot archive file (e.g. /SD/BME0003.BIN)
+ *     Written on every sample.  Never deleted.  Contains both uptime_ms
+ *     and utc_sec so pre-sync records can be retroactively aligned to UTC.
+ *
+ *   sd_log_X_utc()    UTC upload file (e.g. SD_LOG_BME280)
+ *     Written only for UTC-valid records while offline (or always, if
+ *     CONFIG_SD_LOG_ALWAYS_WRITE=y).  Replayed over BLE then deleted.
+ *
+ * All routing decisions live in bme_ble_thread (and peer threads):
+ *
+ *   Connected + subscribed + UTC valid  →  BLE notify + boot file
+ *   Connected + subscribed, no UTC      →  boot file only
+ *   Not connected, UTC valid            →  boot file + UTC upload file
+ *   Not connected, no UTC              →  boot file only
+ *   CONFIG_SD_LOG_ALWAYS_WRITE=y        →  boot file + UTC file always
  *
  * Boot counter is read from /SD/bootcount.txt at init, incremented, and
- * written back. Uptime filenames are built once at init:
- *   e.g. /SD/bme280_upt_0003.bin for boot number 3.
+ * written back.  UTC upload files are tail-healed at init to remove any
+ * partial record left by a previous power-loss mid-write.
+ *
+ * DRAIN DESIGN
+ * ------------
+ * Each drain function reads from the END of the UTC file (most recent first),
+ * sends the record over BLE, then immediately truncates that record off the
+ * end of the file. f_sync() after each truncate makes it durable — a power
+ * cycle between sends leaves the file containing only unsent records.
+ *
+ * On disconnect mid-drain the file contains exactly the unsent records.
+ * On reconnect drain resumes from the new end — no position tracking needed,
+ * no re-sends, no duplicates.
+ *
+ * Most-recent-first ordering means the gateway receives the freshest data
+ * immediately after reconnect, backfilling older records afterwards.
+ *
+ * RAM saving vs old static buffers:
+ *   snd_drain_rows[32]: 712x32 = 22,784 bytes  ->  712 bytes on drain stack
+ *   bme_drain_rows[32]:  40x32 =  1,280 bytes  ->   40 bytes on drain stack
+ *   ens_drain_rows[32]:  32x32 =  1,024 bytes  ->   32 bytes on drain stack
+ *   Total saved: ~25 KB static DRAM
  */
 
 #include "sd_log.h"
@@ -18,10 +52,10 @@
 #include "as7_ble.h"
 #include "mst_ble.h"
 
-#if defined(CONFIG_SENSOR_NODE_1)
+// #if defined(CONFIG_SENSOR_NODE_1)
 #include "sound.h"
 #include "sound_ble.h"
-#endif
+// #endif
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -29,13 +63,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 
 LOG_MODULE_REGISTER(sd_log, LOG_LEVEL_INF);
 
-#define MAX_DRAIN_ROWS   32
-#define UPT_PATH_MAX_LEN 32   /* e.g. "/SD/bme280_upt_9999.bin" = 24 chars */
+#define BOOT_PATH_MAX    24   /* e.g. "/SD/BME0003.BIN" = 16 chars, headroom */
 
-/* ── Drain semaphore ─────────────────────────────────────────────────────── */
+/* ── Drain semaphore — triggered by connected() callback ─────────────────── */
 K_SEM_DEFINE(sd_drain_sem, 0, 1);
 
 /* ── SD state ────────────────────────────────────────────────────────────── */
@@ -45,28 +79,21 @@ static bool sd_draining = false;
 /* ── SD access mutex ─────────────────────────────────────────────────────── */
 static K_MUTEX_DEFINE(sd_mutex);
 
-/* ── Boot-numbered uptime file paths — built once at init ───────────────── */
-#if defined(CONFIG_SENSOR_NODE_1)
-static char upt_bme[UPT_PATH_MAX_LEN];
-static char upt_ens[UPT_PATH_MAX_LEN];
-static char upt_snd[UPT_PATH_MAX_LEN];
-#elif defined(CONFIG_SENSOR_NODE_2)
-static char upt_as7[UPT_PATH_MAX_LEN];
-static char upt_mst[UPT_PATH_MAX_LEN];
-#endif
+/* ── Boot-numbered archive file paths — built once at init ──────────────── */
+// #if defined(CONFIG_SENSOR_NODE_1)
+static char boot_bme[BOOT_PATH_MAX];
+static char boot_ens[BOOT_PATH_MAX];
+static char boot_snd[BOOT_PATH_MAX];
+// #elif defined(CONFIG_SENSOR_NODE_2)
+static char boot_as7[BOOT_PATH_MAX];
+static char boot_mst[BOOT_PATH_MAX];
+// #endif
 
-/* ── Static drain buffers — BSS, never on stack ──────────────────────────── */
-#if defined(CONFIG_SENSOR_NODE_1)
-static struct bme280_msg     bme_drain_rows[MAX_DRAIN_ROWS];
-static struct ens160_msg     ens_drain_rows[MAX_DRAIN_ROWS];
-static struct sound_spec_msg snd_drain_rows[MAX_DRAIN_ROWS];
-#elif defined(CONFIG_SENSOR_NODE_2)
-static struct as7343_msg   as7_drain_rows[MAX_DRAIN_ROWS];
-static struct moisture_msg mst_drain_rows[MAX_DRAIN_ROWS];
-#endif
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PUBLIC STATE ACCESSORS
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 bool sd_log_is_ready(void) {
-    
     return sd_ready;
 }
 
@@ -75,64 +102,118 @@ bool sd_log_is_draining(void) {
 }
 
 void sd_log_set_draining(bool draining) {
-
     sd_draining = draining;
-}
-
-/* ── Path conversion ─────────────────────────────────────────────────────── */
-static void zpath_to_fatfs(const char *zpath, char *out, size_t outlen) {
-    if (strncmp(zpath, "/SD", 3) == 0) {
-        snprintf(out, outlen, "SD:%s", zpath + 3);
-        if (strlen(out) == 3) {
-            strncat(out, "/", outlen - strlen(out) - 1);
-        }
-    } else {
-        strncpy(out, zpath, outlen - 1);
-        out[outlen - 1] = '\0';
-    }
+    /* No k_event — BLE threads are never blocked during drain.
+     * Live data flows alongside drain records. */
 }
 
 /* ── Boot counter ────────────────────────────────────────────────────────── */
-/*
- * Reads the current boot count from SD_LOG_BOOTCOUNT, increments it,
- * writes it back, and returns the new value.
- * Returns 0 if the file cannot be read/written (SD error).
- */
 static uint32_t read_and_increment_boot_count(void) {
     char fatpath[MAX_PATH_LEN];
     char buf[16];
     uint32_t count = 0;
 
-    zpath_to_fatfs(SD_LOG_BOOTCOUNT, fatpath, sizeof(fatpath));
+    to_fatfs_path(SD_LOG_BOOTCOUNT, fatpath, sizeof(fatpath));
 
     FIL fil;
 
-    /* Try to read existing count */
     if (f_open(&fil, fatpath, FA_READ) == FR_OK) {
         UINT br;
         memset(buf, 0, sizeof(buf));
         if (f_read(&fil, buf, sizeof(buf) - 1, &br) == FR_OK && br > 0) {
             count = (uint32_t)strtoul(buf, NULL, 10);
+            LOG_INF("bootcount: read value %u", (unsigned)count);
         }
         f_close(&fil);
     }
 
-    /* Increment */
     count++;
 
-    /* Write back */
-    if (f_open(&fil, fatpath, FA_WRITE | FA_CREATE_ALWAYS) == FR_OK) {
-        UINT bw;
-        snprintf(buf, sizeof(buf), "%u\n", (unsigned)count);
-        f_write(&fil, buf, strlen(buf), &bw);
-        f_close(&fil);
+    FRESULT fr = f_open(&fil, fatpath, FA_CREATE_NEW | FA_WRITE);
+    LOG_INF("bootcount: write open → %d (writing count=%u)", fr, (unsigned)count);
+    if (fr == FR_EXIST) {
+        f_open(&fil, fatpath, FA_WRITE);
+        f_truncate(&fil);
     }
+
+    UINT bw;
+    snprintf(buf, sizeof(buf), "%u\n", (unsigned)count);
+    f_write(&fil, buf, strlen(buf), &bw);
+    f_sync(&fil);
+    f_close(&fil);
 
     return count;
 }
 
-/* ── Init ────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * UTC FILE TAIL HEAL
+ *
+ * Scans a UTC upload file and truncates it to the last byte offset at which
+ * a complete, CRC-valid record ends.  Removes any partial record left by a
+ * power-loss mid-write so that subsequent appends start from clean ground.
+ *
+ * Called at init for every UTC file that exists on the card.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+static void heal_utc_file_tail(const char *zpath, size_t record_len)
+{
+    char fatpath[MAX_PATH_LEN];
+    to_fatfs_path(zpath, fatpath, sizeof(fatpath));
+
+    /* Skip if file doesn't exist yet */
+    FILINFO fno;
+    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
+        return;
+    }
+
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        LOG_WRN("Tail heal: could not open %s", fatpath);
+        return;
+    }
+
+    /*
+     * Walk records, tracking the file offset after each successful one.
+     * record_len + 4 = payload + CRC32 trailer.
+     */
+    size_t  stride        = record_len + 4;
+    FSIZE_t last_good_end = 0;
+    FSIZE_t pos           = 0;
+    uint8_t scratch[128]; /* large enough for any current msg struct + 4 */
+
+    /* Guard: stride must fit in scratch */
+    if (stride > sizeof(scratch)) {
+        LOG_ERR("Tail heal: record stride %u > scratch %u — skipping %s",
+                (unsigned)stride, (unsigned)sizeof(scratch), fatpath);
+        f_close(&fil);
+        return;
+    }
+
+    while (1) {
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, scratch, record_len, &br);
+        if (rc == -ENODATA) {
+            break; /* clean EOF */
+        }
+        if (rc != 0) {
+            /* Corrupt or truncated record — truncate file here */
+            LOG_WRN("Tail heal %s: truncating at offset %llu (removed partial record)",
+                    fatpath, (unsigned long long)last_good_end);
+            f_lseek(&fil, last_good_end);
+            f_truncate(&fil);
+            break;
+        }
+        pos += stride;
+        last_good_end = pos;
+    }
+
+    f_close(&fil);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * INIT
+ * ═══════════════════════════════════════════════════════════════════════════ */
 int sd_log_init(void) {
+
     int rc = fatfs_mount();
     if (rc < 0) {
         LOG_ERR("SD log: mount failed (%d)", rc);
@@ -140,353 +221,487 @@ int sd_log_init(void) {
     }
     sd_ready = true;
 
-    /* Read and increment boot counter, then build uptime file paths */
     uint32_t boot = read_and_increment_boot_count();
     LOG_INF("SD log: boot #%u", (unsigned)boot);
 
+// #if defined(CONFIG_SENSOR_NODE_1)
+    snprintf(boot_bme, sizeof(boot_bme), "/SD/BME%04u.BIN", (unsigned)boot);
+    snprintf(boot_ens, sizeof(boot_ens), "/SD/ENS%04u.BIN", (unsigned)boot);
+    snprintf(boot_snd, sizeof(boot_snd), "/SD/SND%04u.BIN", (unsigned)boot);
 
-#if defined(CONFIG_SENSOR_NODE_1)
-    snprintf(upt_bme, sizeof(upt_bme), "/SD/BME%04u.BIN", (unsigned)boot);
-    snprintf(upt_ens, sizeof(upt_ens), "/SD/ENS%04u.BIN", (unsigned)boot);
-    snprintf(upt_snd, sizeof(upt_snd), "/SD/SND%04u.BIN", (unsigned)boot);
-#elif defined(CONFIG_SENSOR_NODE_2)
-    snprintf(upt_as7, sizeof(upt_as7), "/SD/AS7%04u.BIN", (unsigned)boot);
-    snprintf(upt_mst, sizeof(upt_mst), "/SD/MST%04u.BIN", (unsigned)boot);
-#endif
+    /* Heal any partial tail left by previous power-loss */
+    heal_utc_file_tail(SD_LOG_BME280, sizeof(struct bme280_msg));
+    heal_utc_file_tail(SD_LOG_ENS160, sizeof(struct ens160_msg));
+    heal_utc_file_tail(SD_LOG_SOUND,  sizeof(struct sound_spec_msg));
+
+// #elif defined(CONFIG_SENSOR_NODE_2)
+    snprintf(boot_as7, sizeof(boot_as7), "/SD/AS7%04u.BIN", (unsigned)boot);
+    snprintf(boot_mst, sizeof(boot_mst), "/SD/MST%04u.BIN", (unsigned)boot);
+
+    heal_utc_file_tail(SD_LOG_AS7343,  sizeof(struct as7343_msg));
+    heal_utc_file_tail(SD_LOG_MOISTURE, sizeof(struct moisture_msg));
+// #endif
 
     LOG_INF("SD log: ready");
     return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * LOG FUNCTIONS — route to UTC or boot-numbered uptime file
+ * BOOT PATH ACCESSORS
+ *
+ * Boot archive paths are static to this file, built once at init.
+ * BLE threads retrieve the correct path via these accessors and pass it
+ * directly to SD_LOG_BOOT() / SD_LOG_UTC() at the callsite.
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+// #if defined(CONFIG_SENSOR_NODE_1)
+const char *sd_log_boot_path_bme(void) { return boot_bme; }
+const char *sd_log_boot_path_ens(void) { return boot_ens; }
+const char *sd_log_boot_path_snd(void) { return boot_snd; }
+// #elif defined(CONFIG_SENSOR_NODE_2)
+const char *sd_log_boot_path_as7(void) { return boot_as7; }
+const char *sd_log_boot_path_mst(void) { return boot_mst; }
+// #endif
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * LOG FUNCTIONS — two generic write primitives
+ *
+ * All routing decisions (connected/disconnected, UTC valid, ALWAYS_WRITE)
+ * are made by the caller (bme_ble_thread etc.) before calling these.
+ *
+ * Use SD_LOG_BOOT(path, msg_ptr) and SD_LOG_UTC(path, msg_ptr) from
+ * sd_log.h at callsites — these supply sizeof automatically from the
+ * pointer type, preserving type safety without per-modality functions.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+void sd_log_write_boot(const char *path, const void *msg, size_t len)
+{
+    if (!sd_ready) { return; }
+    k_mutex_lock(&sd_mutex, K_FOREVER);
+    write_raw_to_file(path, (const uint8_t *)msg, len);
+    k_mutex_unlock(&sd_mutex);
+}
+
+void sd_log_write_utc(const char *path, const void *msg, size_t len)
+{
+    if (!sd_ready) { return; }
+    k_mutex_lock(&sd_mutex, K_FOREVER);
+    write_raw_to_file(path, (const uint8_t *)msg, len);
+    k_mutex_unlock(&sd_mutex);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DRAIN HELPERS — UTC upload files only
+ *
+ * Truncate-from-end pattern — most recent record first, no re-sends.
+ *
+ * Each function:
+ *   1. Opens the UTC file FA_READ | FA_WRITE
+ *   2. Seeks to the last record (fsize - stride)
+ *   3. Reads and CRC-verifies it
+ *   4. Sends over BLE via pack_and_notify (returns false = disconnected)
+ *   5. Truncates that record off the end + f_sync (durable before next send)
+ *   6. Repeats until file is empty then deletes it
+ *
+ * On disconnect: file contains exactly the unsent records. Next connection
+ * resumes from the new end — no position tracking, no duplicates.
+ *
+ * Corrupt tail record: truncated off silently, next record tried.
+ *
+ * Throttling:
+ *   drain_snd: 2000ms — gateway JSON serialisation of ~2886 byte packets
+ *   drain_as7: 100ms  — ~400 byte packets, cooperative yield only
+ *   drain_bme, drain_ens, drain_mst: no throttle — small packets
+ * =========================================================================== */
 
 #if defined(CONFIG_SENSOR_NODE_1)
 
-void sd_log_bme(const struct bme280_msg *msg) {
-    const char *path;
+static void drain_bme(void)
+{
+    k_sem_take(&bme_notify_sem, K_SECONDS(30));
+    const size_t stride = sizeof(struct bme280_msg) + 4;
+    char fatpath[MAX_PATH_LEN];
+    int  count = 0, corrupt = 0;
+    struct bme280_msg row;
 
-    if (!sd_ready) {
-        return;
-    }
-
-    if (msg->utc_sec > SD_LOG_UTC_MIN) {
-        path = SD_LOG_BME280;
-    } else {
-        path = upt_bme;
-    }
+    to_fatfs_path(SD_LOG_BME280, fatpath, sizeof(fatpath));
 
     k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)msg, sizeof(*msg));
+    FILINFO fno;
+    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    if (fno.fsize % stride != 0) {
+        LOG_WRN("SD drain BME: file size not multiple of stride — skipping");
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
     k_mutex_unlock(&sd_mutex);
+
+    while (1) {
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        FSIZE_t fsize = f_size(&fil);
+        if (fsize < stride) {
+            f_close(&fil);
+            f_unlink(fatpath);
+            k_mutex_unlock(&sd_mutex);
+            break;
+        }
+        FSIZE_t rec_pos = fsize - stride;
+        f_lseek(&fil, rec_pos);
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, (uint8_t *)&row,
+                                     sizeof(struct bme280_msg), &br);
+        if (rc != 0) {
+            LOG_WRN("SD drain BME: corrupt tail — truncating");
+            f_lseek(&fil, rec_pos);
+            f_truncate(&fil);
+            f_sync(&fil);
+            corrupt++;
+            k_mutex_unlock(&sd_mutex);
+            continue;
+        }
+        k_mutex_unlock(&sd_mutex);
+
+        if (!bme_pack_and_notify(&row)) {
+            LOG_WRN("SD drain BME: disconnected at record %d — %d remain in file",
+                    count, (int)(rec_pos / stride));
+            k_mutex_lock(&sd_mutex, K_FOREVER);
+            f_close(&fil);
+            k_mutex_unlock(&sd_mutex);
+            return;
+        }
+        count++;
+
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        f_lseek(&fil, rec_pos);
+        f_truncate(&fil);
+        f_sync(&fil);
+        k_mutex_unlock(&sd_mutex);
+    }
+
+    LOG_INF("SD drain BME: %d OK, %d corrupt", count, corrupt);
 }
 
-void sd_log_ens(const struct ens160_msg *msg) {
-    const char *path;
+static void drain_ens(void)
+{
+    k_sem_take(&ens_notify_sem, K_SECONDS(30));
+    const size_t stride = sizeof(struct ens160_msg) + 4;
+    char fatpath[MAX_PATH_LEN];
+    int  count = 0, corrupt = 0;
+    struct ens160_msg row;
 
-    if (!sd_ready) {
-        return;
-    }
-
-    if (msg->utc_sec > SD_LOG_UTC_MIN) {
-        path = SD_LOG_ENS160;
-    } else {
-        path = upt_ens;
-    }
+    to_fatfs_path(SD_LOG_ENS160, fatpath, sizeof(fatpath));
 
     k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)msg, sizeof(*msg));
+    FILINFO fno;
+    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    if (fno.fsize % stride != 0) {
+        LOG_WRN("SD drain ENS: file size not multiple of stride — skipping");
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
     k_mutex_unlock(&sd_mutex);
+
+    while (1) {
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        FSIZE_t fsize = f_size(&fil);
+        if (fsize < stride) {
+            f_close(&fil);
+            f_unlink(fatpath);
+            k_mutex_unlock(&sd_mutex);
+            break;
+        }
+        FSIZE_t rec_pos = fsize - stride;
+        f_lseek(&fil, rec_pos);
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, (uint8_t *)&row,
+                                     sizeof(struct ens160_msg), &br);
+        if (rc != 0) {
+            LOG_WRN("SD drain ENS: corrupt tail — truncating");
+            f_lseek(&fil, rec_pos);
+            f_truncate(&fil);
+            f_sync(&fil);
+            corrupt++;
+            k_mutex_unlock(&sd_mutex);
+            continue;
+        }
+        k_mutex_unlock(&sd_mutex);
+
+        if (!ens_pack_and_notify(&row)) {
+            LOG_WRN("SD drain ENS: disconnected at record %d — %d remain in file",
+                    count, (int)(rec_pos / stride));
+            k_mutex_lock(&sd_mutex, K_FOREVER);
+            f_close(&fil);
+            k_mutex_unlock(&sd_mutex);
+            return;
+        }
+        count++;
+
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        f_lseek(&fil, rec_pos);
+        f_truncate(&fil);
+        f_sync(&fil);
+        k_mutex_unlock(&sd_mutex);
+    }
+
+    LOG_INF("SD drain ENS: %d OK, %d corrupt", count, corrupt);
 }
 
-void sd_log_snd(const struct sound_spec_msg *spec) {
-    const char *path;
+static void drain_snd(void)
+{
+    k_sem_take(&snd_drain_sem, K_SECONDS(30));
+    const size_t stride = sizeof(struct sound_spec_msg) + 4;
+    char fatpath[MAX_PATH_LEN];
+    int  count = 0, corrupt = 0;
+    struct sound_spec_msg row;
 
-    if (!sd_ready) {
-        return;
-    }
-
-    if (spec->utc_sec > SD_LOG_UTC_MIN) {
-        path = SD_LOG_SOUND;
-    } else {
-        path = upt_snd;
-    }
+    to_fatfs_path(SD_LOG_SOUND, fatpath, sizeof(fatpath));
 
     k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)spec, sizeof(*spec));
+    FILINFO fno;
+    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    if (fno.fsize % stride != 0) {
+        LOG_WRN("SD drain SND: file size not multiple of stride — skipping");
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
     k_mutex_unlock(&sd_mutex);
+
+    while (1) {
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        FSIZE_t fsize = f_size(&fil);
+        if (fsize < stride) {
+            f_close(&fil);
+            f_unlink(fatpath);
+            k_mutex_unlock(&sd_mutex);
+            break;
+        }
+        FSIZE_t rec_pos = fsize - stride;
+        f_lseek(&fil, rec_pos);
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, (uint8_t *)&row,
+                                     sizeof(struct sound_spec_msg), &br);
+        if (rc != 0) {
+            LOG_WRN("SD drain SND: corrupt tail — truncating");
+            f_lseek(&fil, rec_pos);
+            f_truncate(&fil);
+            f_sync(&fil);
+            corrupt++;
+            k_mutex_unlock(&sd_mutex);
+            continue;
+        }
+        k_mutex_unlock(&sd_mutex);
+
+        if (!snd_is_connected()) {
+            LOG_WRN("SD drain SND: disconnected at record %d — %d remain in file",
+                    count, (int)(rec_pos / stride));
+            k_mutex_lock(&sd_mutex, K_FOREVER);
+            f_close(&fil);
+            k_mutex_unlock(&sd_mutex);
+            return;
+        }
+
+        send_spectrum(&row);
+        count++;
+
+        /* Truncate sent record off end — durable before next send */
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        f_lseek(&fil, rec_pos);
+        f_truncate(&fil);
+        f_sync(&fil);
+        k_mutex_unlock(&sd_mutex);
+
+        /* Throttle — gateway serialises ~2886 byte sound JSON;
+         * live sound arrives at 1/sec so 2s gives a clear slot */
+        k_sleep(K_MSEC(2000));
+    }
+
+    LOG_INF("SD drain SND: %d OK, %d corrupt", count, corrupt);
 }
 
 #elif defined(CONFIG_SENSOR_NODE_2)
 
-void sd_log_as7(const struct as7343_msg *msg) {
-    const char *path;
-
-    if (!sd_ready) {
-        return;
-    }
-
-    if (msg->utc_sec > SD_LOG_UTC_MIN) {
-        path = SD_LOG_AS7343;
-    } else {
-        path = upt_as7;
-    }
-
-    k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)msg, sizeof(*msg));
-    k_mutex_unlock(&sd_mutex);
-}
-
-void sd_log_mst(const struct moisture_msg *msg) {
-    const char *path;
-
-    if (!sd_ready) {
-        return;
-    }
-
-    if (msg->utc_sec > SD_LOG_UTC_MIN) {
-        path = SD_LOG_MOISTURE;
-    } else {
-        path = upt_mst;
-    }
-
-    k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)msg, sizeof(*msg));
-    k_mutex_unlock(&sd_mutex);
-}
-
-#endif /* CONFIG_SENSOR_NODE_1 / 2 */
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * DRAIN HELPERS — only primary UTC files are replayed over BLE
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-#if defined(CONFIG_SENSOR_NODE_1)
-
-static void drain_bme(void) {
-
+static void drain_as7(void)
+{
+    k_sem_take(&as7_notify_sem, K_SECONDS(30));
+    const size_t stride = sizeof(struct as7343_msg) + 4;
     char fatpath[MAX_PATH_LEN];
-    int count = 0;
+    int  count = 0, corrupt = 0;
+    struct as7343_msg row;
 
-    zpath_to_fatfs(SD_LOG_BME280, fatpath, sizeof(fatpath));
+    to_fatfs_path(SD_LOG_AS7343, fatpath, sizeof(fatpath));
 
     k_mutex_lock(&sd_mutex, K_FOREVER);
-
     FILINFO fno;
     if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
         k_mutex_unlock(&sd_mutex);
         return;
     }
-
-    FIL fil;
-    if (f_open(&fil, fatpath, FA_READ) != FR_OK) {
+    if (fno.fsize % stride != 0) {
+        LOG_WRN("SD drain AS7: file size not multiple of stride — skipping");
         k_mutex_unlock(&sd_mutex);
         return;
     }
-
-    UINT br;
-    while (count < MAX_DRAIN_ROWS) {
-        FRESULT fr = f_read(&fil, &bme_drain_rows[count],
-                            sizeof(struct bme280_msg), &br);
-        if (fr != FR_OK || br == 0) {
-            break;
-        }
-        if (br == sizeof(struct bme280_msg)) {
-            count++;
-        }
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        k_mutex_unlock(&sd_mutex);
+        return;
     }
-
-    f_close(&fil);
-    f_unlink(fatpath);
     k_mutex_unlock(&sd_mutex);
 
-    for (int i = 0; i < count; i++) {
-        bme_pack_and_notify(&bme_drain_rows[i]);
-    }
-
-    LOG_INF("SD drain BME: %d UTC records replayed", count);
-}
-
-static void drain_ens(void) {
-    char fatpath[MAX_PATH_LEN];
-    int count = 0;
-
-    zpath_to_fatfs(SD_LOG_ENS160, fatpath, sizeof(fatpath));
-
-    k_mutex_lock(&sd_mutex, K_FOREVER);
-
-    FILINFO fno;
-    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
-        k_mutex_unlock(&sd_mutex);
-        return;
-    }
-
-    FIL fil;
-    if (f_open(&fil, fatpath, FA_READ) != FR_OK) {
-        k_mutex_unlock(&sd_mutex);
-        return;
-    }
-
-    UINT br;
-    while (count < MAX_DRAIN_ROWS) {
-        FRESULT fr = f_read(&fil, &ens_drain_rows[count],
-                            sizeof(struct ens160_msg), &br);
-        if (fr != FR_OK || br == 0) {
+    while (1) {
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        FSIZE_t fsize = f_size(&fil);
+        if (fsize < stride) {
+            f_close(&fil);
+            f_unlink(fatpath);
+            k_mutex_unlock(&sd_mutex);
             break;
         }
-        if (br == sizeof(struct ens160_msg)) {
-            count++;
+        FSIZE_t rec_pos = fsize - stride;
+        f_lseek(&fil, rec_pos);
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, (uint8_t *)&row,
+                                     sizeof(struct as7343_msg), &br);
+        if (rc != 0) {
+            LOG_WRN("SD drain AS7: corrupt tail — truncating");
+            f_lseek(&fil, rec_pos);
+            f_truncate(&fil);
+            f_sync(&fil);
+            corrupt++;
+            k_mutex_unlock(&sd_mutex);
+            continue;
         }
-    }
-
-    f_close(&fil);
-    f_unlink(fatpath);
-    k_mutex_unlock(&sd_mutex);
-
-    for (int i = 0; i < count; i++) {
-        ens_pack_and_notify(&ens_drain_rows[i]);
-    }
-
-    LOG_INF("SD drain ENS: %d UTC records replayed", count);
-}
-
-static void drain_snd(void) {
-    char fatpath[MAX_PATH_LEN];
-    int count = 0;
-
-    zpath_to_fatfs(SD_LOG_SOUND, fatpath, sizeof(fatpath));
-
-    k_mutex_lock(&sd_mutex, K_FOREVER);
-
-    FILINFO fno;
-    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
         k_mutex_unlock(&sd_mutex);
-        return;
-    }
 
-    FIL fil;
-    if (f_open(&fil, fatpath, FA_READ) != FR_OK) {
+        if (!as7_pack_and_notify(&row)) {
+            LOG_WRN("SD drain AS7: disconnected at record %d — %d remain in file",
+                    count, (int)(rec_pos / stride));
+            k_mutex_lock(&sd_mutex, K_FOREVER);
+            f_close(&fil);
+            k_mutex_unlock(&sd_mutex);
+            return;
+        }
+        count++;
+
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        f_lseek(&fil, rec_pos);
+        f_truncate(&fil);
+        f_sync(&fil);
         k_mutex_unlock(&sd_mutex);
-        return;
-    }
 
-    UINT br;
-    while (count < MAX_DRAIN_ROWS) {
-        FRESULT fr = f_read(&fil, &snd_drain_rows[count],
-                            sizeof(struct sound_spec_msg), &br);
-        if (fr != FR_OK || br == 0) {
-            break;
-        }
-        if (br == sizeof(struct sound_spec_msg)) {
-            count++;
-        }
-    }
-
-    f_close(&fil);
-    f_unlink(fatpath);
-    k_mutex_unlock(&sd_mutex);
-
-    for (int i = 0; i < count; i++) {
-        send_spectrum(&snd_drain_rows[i]);
+        /* Small yield — ~400 byte packets, cooperative scheduling */
         k_sleep(K_MSEC(100));
     }
 
-    LOG_INF("SD drain SND: %d UTC records replayed", count);
+    LOG_INF("SD drain AS7: %d OK, %d corrupt", count, corrupt);
 }
 
-#elif defined(CONFIG_SENSOR_NODE_2)
-
-static void drain_as7(void) {
+static void drain_mst(void)
+{
+    k_sem_take(&mst_notify_sem, K_SECONDS(30));
+    const size_t stride = sizeof(struct moisture_msg) + 4;
     char fatpath[MAX_PATH_LEN];
-    int count = 0;
+    int  count = 0, corrupt = 0;
+    struct moisture_msg row;
 
-    zpath_to_fatfs(SD_LOG_AS7343, fatpath, sizeof(fatpath));
+    to_fatfs_path(SD_LOG_MOISTURE, fatpath, sizeof(fatpath));
 
     k_mutex_lock(&sd_mutex, K_FOREVER);
-
     FILINFO fno;
     if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
         k_mutex_unlock(&sd_mutex);
         return;
     }
-
-    FIL fil;
-    if (f_open(&fil, fatpath, FA_READ) != FR_OK) {
+    if (fno.fsize % stride != 0) {
+        LOG_WRN("SD drain MST: file size not multiple of stride — skipping");
         k_mutex_unlock(&sd_mutex);
         return;
     }
-
-    UINT br;
-    while (count < MAX_DRAIN_ROWS) {
-        FRESULT fr = f_read(&fil, &as7_drain_rows[count],
-                            sizeof(struct as7343_msg), &br);
-        if (fr != FR_OK || br == 0) {
-            break;
-        }
-        if (br == sizeof(struct as7343_msg)) {
-            count++;
-        }
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        k_mutex_unlock(&sd_mutex);
+        return;
     }
-
-    f_close(&fil);
-    f_unlink(fatpath);
     k_mutex_unlock(&sd_mutex);
 
-    for (int i = 0; i < count; i++) {
-        as7_pack_and_notify(&as7_drain_rows[i]);
-    }
-
-    LOG_INF("SD drain AS7: %d UTC records replayed", count);
-}
-
-static void drain_mst(void) {
-    char fatpath[MAX_PATH_LEN];
-    int count = 0;
-
-    zpath_to_fatfs(SD_LOG_MOISTURE, fatpath, sizeof(fatpath));
-
-    k_mutex_lock(&sd_mutex, K_FOREVER);
-
-    FILINFO fno;
-    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
-        k_mutex_unlock(&sd_mutex);
-        return;
-    }
-
-    FIL fil;
-    if (f_open(&fil, fatpath, FA_READ) != FR_OK) {
-        k_mutex_unlock(&sd_mutex);
-        return;
-    }
-
-    UINT br;
-    while (count < MAX_DRAIN_ROWS) {
-        FRESULT fr = f_read(&fil, &mst_drain_rows[count],
-                            sizeof(struct moisture_msg), &br);
-        if (fr != FR_OK || br == 0) {
+    while (1) {
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        FSIZE_t fsize = f_size(&fil);
+        if (fsize < stride) {
+            f_close(&fil);
+            f_unlink(fatpath);
+            k_mutex_unlock(&sd_mutex);
             break;
         }
-        if (br == sizeof(struct moisture_msg)) {
-            count++;
+        FSIZE_t rec_pos = fsize - stride;
+        f_lseek(&fil, rec_pos);
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, (uint8_t *)&row,
+                                     sizeof(struct moisture_msg), &br);
+        if (rc != 0) {
+            LOG_WRN("SD drain MST: corrupt tail — truncating");
+            f_lseek(&fil, rec_pos);
+            f_truncate(&fil);
+            f_sync(&fil);
+            corrupt++;
+            k_mutex_unlock(&sd_mutex);
+            continue;
         }
+        k_mutex_unlock(&sd_mutex);
+
+        if (!mst_pack_and_notify(&row)) {
+            LOG_WRN("SD drain MST: disconnected at record %d — %d remain in file",
+                    count, (int)(rec_pos / stride));
+            k_mutex_lock(&sd_mutex, K_FOREVER);
+            f_close(&fil);
+            k_mutex_unlock(&sd_mutex);
+            return;
+        }
+        count++;
+
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        f_lseek(&fil, rec_pos);
+        f_truncate(&fil);
+        f_sync(&fil);
+        k_mutex_unlock(&sd_mutex);
     }
 
-    f_close(&fil);
-    f_unlink(fatpath);
-    k_mutex_unlock(&sd_mutex);
-
-    for (int i = 0; i < count; i++) {
-        mst_pack_and_notify(&mst_drain_rows[i]);
-    }
-
-    LOG_INF("SD drain MST: %d UTC records replayed", count);
+    LOG_INF("SD drain MST: %d OK, %d corrupt", count, corrupt);
 }
 
 #endif /* CONFIG_SENSOR_NODE_1 / 2 */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * DRAIN THREAD
+ *
+ * Triggered by k_sem_give(&sd_drain_sem) from the BLE connected() callback.
+ * BLE threads are NOT blocked during drain — live data flows alongside
+ * drain records.  drain_snd() is throttled internally at 2000ms/record
+ * to avoid overwhelming the gateway's JSON serialiser.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 void sd_drain_thread(void) {
@@ -501,21 +716,22 @@ void sd_drain_thread(void) {
             continue;
         }
 
-        LOG_INF("SD drain: replaying UTC-stamped records...");
-        k_sleep(K_SECONDS(10));
+        LOG_INF("SD drain: replaying UTC-stamped records alongside live BLE...");
+        sd_log_set_draining(true);
+        k_sleep(K_SECONDS(5));
 
         #if defined(CONFIG_SENSOR_NODE_1)
         drain_bme();
         drain_ens();
-        drain_snd();
+        drain_snd();   /* throttled at 2000ms/record internally */
         #elif defined(CONFIG_SENSOR_NODE_2)
-        drain_as7();
+        drain_as7();   /* throttled at 100ms/record internally */
         drain_mst();
         #else
         // #error "No sensor node selected."
         #endif
 
         sd_log_set_draining(false);
-        LOG_INF("SD drain: complete — resuming live BLE");
+        LOG_INF("SD drain: complete");
     }
 }

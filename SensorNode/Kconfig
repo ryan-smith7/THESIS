@@ -28,3 +28,11 @@ endchoice
 config SD_LOGGING
     bool "Enable SD card offline logging when BLE is unavailable"
     default n
+
+config SD_LOG_ALWAYS_WRITE
+    bool "Enable SD card to always write and not just when BLE not connected"
+    default n
+
+config MST_POLY
+    bool "Enables Polynomial calibration for the Capacitive Moisture Sensor"
+    default n

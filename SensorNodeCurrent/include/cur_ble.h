@@ -18,7 +18,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/gatt.h>
 #include "sensor.h"
-#include "sd_log.h"
+// #include "sd_log.h"
 
 /* ── Thread config ──────────────────────────────────────── */
 #define CUR_BLE_STACK_SIZE  1024

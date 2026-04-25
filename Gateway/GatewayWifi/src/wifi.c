@@ -220,7 +220,7 @@ static void wifi_retry_thread_fn(void *a, void *b, void *c)
     k_mutex_unlock(&wifi_retry_mutex);
 
     LOG_INF("Retrying WiFi connection (%d) in 5s", retry + 1);
-    k_msleep(5000);
+    k_msleep(1000);
 
     wifi_connect_with_bssid();
 }

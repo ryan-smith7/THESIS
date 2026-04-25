@@ -28,22 +28,6 @@
 #define SOUND_BIN_HIGH   348U
 #define SOUND_NUM_BINS   (SOUND_BIN_HIGH - SOUND_BIN_LOW + 1U)   /* 348 */
 
-/* ── Compact summary message (→ sound_q) ────────────────── */
-/*
- * Published once per second to sound_q.
- * Consumed by combiner_thread → packed into main sensor_blk BLE packet.
- *
- * Scaling:
- *   rms_dbfs_x100 = (int16_t)(rms_dbfs * 100)  e.g. -38.20 → -3820
- *   peak_freq_hz  = (uint16_t) peak Hz          e.g. 1206
- *   peak_mag_x10  = (uint16_t)(peak_mag * 10)   e.g. 142.5 → 1425
- */
-struct sound_msg {
-    int16_t  rms_dbfs_x100;
-    uint16_t peak_freq_hz;
-    uint16_t peak_mag_x10;
-};
-
 /* ── Full spectrum message (→ sound_spec_q) ─────────────── */
 /*
  * Published once per second to sound_spec_q.
@@ -57,16 +41,16 @@ struct sound_msg {
  * Used by gateway as reassembly key and forwarded to Azure as timestamp.
  */
 struct sound_spec_msg {
-    uint32_t utc_sec;              /* UTC seconds at measurement (0 = unsynced) */
-    uint16_t utc_ms;               /* UTC milliseconds 0-999                    */
-    int16_t  rms_dbfs_x100;
-    uint16_t bins[SOUND_NUM_BINS]; /* 348 × uint16_t = 696 bytes */
-};
+    uint32_t utc_sec;                    /* offset 0,  size 4  */
+    uint16_t utc_ms;                     /* offset 4,  size 2  */
+    int16_t  rms_dbfs_x100;              /* offset 6,  size 2  */
+    uint64_t uptime_ms;                  /* offset 8,  size 8 ✓ */
+    uint16_t bins[SOUND_NUM_BINS];       /* offset 16, size 696 */
+};                                       /* total: 712 bytes */
 
 /* ── Message queues ─────────────────────────────────────── */
 #define SOUND_Q_DEPTH  4
-extern struct k_msgq sound_q;       /* compact summary  */
-extern struct k_msgq sound_spec_q;  /* full spectrum    */
+extern struct k_msgq snd_q;  /* full spectrum    */
 
 /* ── Thread entry point ─────────────────────────────────── */
 extern void sound_thread(void);

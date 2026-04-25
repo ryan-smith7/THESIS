@@ -22,7 +22,17 @@
 #include <zephyr/logging/log.h>
 
 /* ── CCC changed callback ─────────────────────────────────────────────── */
-#define MODALITY_CCC_CHANGED(name, flag)                                    \
+#define MODALITY_CCC_CHANGED(name, flag, sem)                               \
+    static void name##_ccc_changed(const struct bt_gatt_attr *attr,         \
+                                   uint16_t value)                          \
+    {                                                                       \
+        flag = (value == BT_GATT_CCC_NOTIFY);                              \
+        if (flag) { k_sem_give(&sem); }                                     \
+        LOG_INF(#name " notifications %s", flag ? "on" : "off");           \
+    }
+
+/* Without semaphore — for non-drainable modalities (bat, cur) */
+#define MODALITY_CCC_CHANGED_NOSEM(name, flag)                              \
     static void name##_ccc_changed(const struct bt_gatt_attr *attr,         \
                                    uint16_t value)                          \
     {                                                                       \

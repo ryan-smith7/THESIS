@@ -29,13 +29,15 @@ LOG_MODULE_REGISTER(ens_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xE1
 
-#define ENS_BUF_LEN 11  /* was 9 — added 2 bytes for utc_ms */
+#define ENS_BUF_LEN 12  /* was 9 — added 2 bytes for utc_ms */
 
 static bool            ens_notify_enabled = false;
 static struct bt_conn *ens_conn           = NULL;
 static uint8_t         ens_buf[ENS_BUF_LEN];
 
-MODALITY_CCC_CHANGED(ens, ens_notify_enabled);
+K_SEM_DEFINE(ens_notify_sem, 0, 1);
+
+MODALITY_CCC_CHANGED(ens, ens_notify_enabled, ens_notify_sem);
 MODALITY_READ_HANDLER(ens, ens_buf, ENS_BUF_LEN);
 MODALITY_GATT_SERVICE(ens, ENS_SVC_UUID_BYTES, ENS_CHR_UUID_BYTES);
 
@@ -53,6 +55,7 @@ static void ens_disconnected(struct bt_conn *conn, uint8_t reason) {
         ens_conn = NULL; 
     }
     ens_notify_enabled = false;
+    k_sem_reset(&ens_notify_sem);
 }
 
 static struct bt_conn_cb ens_conn_cb = {
@@ -60,10 +63,12 @@ static struct bt_conn_cb ens_conn_cb = {
     .disconnected = ens_disconnected,
 };
 
-void ens_pack_and_notify(const struct ens160_msg *msg) {
+bool ens_pack_and_notify(const struct ens160_msg *msg) {
 
     struct bt_conn *conn = ens_conn;
-    if (!conn || !ens_notify_enabled) return;
+    if (!conn || !ens_notify_enabled) {
+        return false;
+    }
 
     uint16_t eco2 = (uint16_t)msg->eco2_ppm;
     uint16_t tvoc = (uint16_t)msg->tvoc_ppb;
@@ -79,41 +84,43 @@ void ens_pack_and_notify(const struct ens160_msg *msg) {
     ens_buf[8]  = (tvoc >>  8) & 0xFF;            /* tvoc    [8-9] */
     ens_buf[9]  =  tvoc        & 0xFF;
     ens_buf[10] = (uint8_t)msg->aqi;              /* aqi     [10]  */
+    ens_buf[11] =  DEVICE_ID;                      /* dev_id  [10]   */
 
     MODALITY_NOTIFY(ens, conn, ens_notify_enabled, ens_buf, ENS_BUF_LEN);
+    return true;
 }
 
 void ens_ble_thread(void) {
-
     bt_conn_cb_register(&ens_conn_cb);
     LOG_INF("ens_ble thread ready");
- 
+
     while (1) {
         struct ens160_msg msg;
         if (k_msgq_get(&ens_q, &msg, K_FOREVER) != 0) {
             continue;
         }
- 
+
+        bool utc_valid = (msg.utc_sec > SD_LOG_UTC_MIN);
+
+        if (ens_notify_enabled && ens_conn && utc_valid) {
+            ens_pack_and_notify(&msg);
 #if defined(CONFIG_SD_LOGGING)
-        if (sd_log_is_draining()) {
-            continue;
-        }
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+            SD_LOG_BOOT(sd_log_boot_path_ens(), &msg);
 #endif
- 
-        if (ens_notify_enabled && ens_conn) {
-            if (msg.utc_sec > SD_LOG_UTC_MIN) {
-                ens_pack_and_notify(&msg);
+#endif
+        } else {
+#if defined(CONFIG_SD_LOGGING)
+            if (utc_valid) {
+                SD_LOG_UTC(SD_LOG_ENS160, &msg);
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+                SD_LOG_BOOT(sd_log_boot_path_ens(), &msg);
+#endif
             } else {
-#if defined(CONFIG_SD_LOGGING)
-                /* Connected but no UTC sync — log to SD uptime file */
-                sd_log_ens(&msg);
-#endif
+                SD_LOG_BOOT(sd_log_boot_path_ens(), &msg);
             }
-        }
-#if defined(CONFIG_SD_LOGGING)
-        else {
-            sd_log_ens(&msg);
-        }
 #endif
+        }
     }
 }
+ 

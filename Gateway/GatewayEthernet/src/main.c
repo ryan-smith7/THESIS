@@ -49,14 +49,14 @@ K_THREAD_DEFINE(process_data_tid,
                 process_data_thread,
                 NULL, NULL, NULL,
                 BASE_PROCESS_PRIORITY, 0,
-                15000);
+                5000);
 
 K_THREAD_DEFINE(base_tid,
                 BASE_CONTROL_STACK_SIZE,
                 base_thread,
                 NULL, NULL, NULL,
                 BASE_CONTROL_PRIORITY, 0,
-                15000);
+                5000);
 
 int main(void)
 {

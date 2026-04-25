@@ -18,7 +18,7 @@ LOG_MODULE_REGISTER(current_sensor, LOG_LEVEL_INF);
 #define CURRENT_Q_DEPTH     8
 #define CURRENT_STACK_SIZE  2048
 #define CURRENT_PRIORITY    6
-#define SAMPLE_PERIOD_MS    1000 //Need to increase sampling (next thing to do)
+#define SAMPLE_PERIOD_CURRENT_MS        5000U
  
 K_MSGQ_DEFINE(current_q, sizeof(struct current_msg), CURRENT_Q_DEPTH, 4);
  
@@ -78,6 +78,6 @@ void current_thread(void) {
             (void)k_msgq_put(&current_q, &m, K_NO_WAIT); // enqueue new message
         }
  
-        k_msleep(SAMPLE_PERIOD_MS);
+        k_msleep(SAMPLE_PERIOD_CURRENT_MS);
     }
 }

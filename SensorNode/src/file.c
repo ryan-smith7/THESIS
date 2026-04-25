@@ -58,7 +58,7 @@ static char current_path[MAX_PATH_LEN] = SD_MOUNT_POINT;
  * /SD/foo/bar.txt  →  SD:/foo/bar.txt
  * /SD             →  SD:/
  */
-static void to_fatfs_path(const char *zpath, char *fatpath, size_t maxlen) {
+void to_fatfs_path(const char *zpath, char *fatpath, size_t maxlen) {
 	if (strncmp(zpath, "/SD", 3) == 0) {
 		snprintf(fatpath, maxlen, "SD:%s", zpath + 3);
 		if (strlen(fatpath) == 3) {
@@ -160,6 +160,41 @@ int fatfs_mount(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * CRC-32 (ISO 3309 / ITU-T V.42)
+ *
+ * Standard table-driven CRC32. No external dependency — table is built once
+ * at first call from the standard polynomial 0xEDB88320 (reflected form of
+ * 0x04C11DB7).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+static uint32_t crc32_table[256];
+static bool     crc32_table_ready = false;
+
+static void crc32_init_table(void)
+{
+	for (uint32_t i = 0; i < 256; i++) {
+		uint32_t crc = i;
+		for (int j = 0; j < 8; j++) {
+			crc = (crc & 1) ? (0xEDB88320U ^ (crc >> 1)) : (crc >> 1);
+		}
+		crc32_table[i] = crc;
+	}
+	crc32_table_ready = true;
+}
+
+static uint32_t crc32_compute(const uint8_t *data, size_t len)
+{
+	if (!crc32_table_ready) {
+		crc32_init_table();
+	}
+	uint32_t crc = 0xFFFFFFFFU;
+	for (size_t i = 0; i < len; i++) {
+		crc = crc32_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+	}
+	return crc ^ 0xFFFFFFFFU;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * PUBLIC FILE I/O  (raw FatFS)
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -192,7 +227,21 @@ int write_data_to_file(const char *fname, char *data, uint8_t trunc_or_append) {
 	return 0;
 }
 
-int write_raw_to_file(const char *fname, const uint8_t *data, size_t len) {
+/**
+ * @brief Write a binary record to a file with a trailing CRC32 and f_sync.
+ *
+ * File format per record:
+ *   [N bytes: raw struct payload][4 bytes: CRC32, little-endian]
+ *
+ * CRC covers only the struct payload. On read, use read_raw_verify_crc()
+ * which re-derives the CRC and compares against the stored trailer.
+ *
+ * f_sync() is called after every successful write so that a power-loss
+ * between records corrupts at most the in-progress record — the FAT and
+ * directory entry for all preceding records are already committed.
+ */
+int write_raw_to_file(const char *fname, const uint8_t *data, size_t len)
+{
 	char fatpath[MAX_PATH_LEN];
 	to_fatfs_path(fname, fatpath, sizeof(fatpath));
 
@@ -209,20 +258,111 @@ int write_raw_to_file(const char *fname, const uint8_t *data, size_t len) {
 	if (fr == FR_EXIST) {
 		fr = f_open(&fil, fatpath, FA_OPEN_APPEND | FA_WRITE);
 	}
-
 	if (fr != FR_OK) {
 		LOG_ERR("FAIL: f_open %s: %d", fatpath, fr);
 		return -EIO;
 	}
 
+	/* Write payload */
 	fr = f_write(&fil, data, len, &bw);
 	if (fr != FR_OK || bw != len) {
-		LOG_ERR("FAIL: f_write %s: %d (wrote %u of %u)", fatpath, fr, bw, len);
+		LOG_ERR("FAIL: f_write payload %s: %d (wrote %u of %u)",
+			fatpath, fr, bw, (unsigned)len);
 		f_close(&fil);
 		return -EIO;
 	}
 
+	/* Compute and append CRC32 trailer (little-endian) */
+	uint32_t crc = crc32_compute(data, len);
+	uint8_t  crc_bytes[4] = {
+		(uint8_t)(crc),
+		(uint8_t)(crc >> 8),
+		(uint8_t)(crc >> 16),
+		(uint8_t)(crc >> 24),
+	};
+	fr = f_write(&fil, crc_bytes, sizeof(crc_bytes), &bw);
+	if (fr != FR_OK || bw != sizeof(crc_bytes)) {
+		LOG_ERR("FAIL: f_write CRC %s: %d", fatpath, fr);
+		f_close(&fil);
+		return -EIO;
+	}
+
+	/* Flush FAT + dir entry — limits corruption window to this record only */
+	fr = f_sync(&fil);
+	if (fr != FR_OK) {
+		LOG_WRN("f_sync %s failed: %d (payload written, metadata at risk)",
+			fatpath, fr);
+	}
+
 	f_close(&fil);
+	return 0;
+}
+
+/**
+ * @brief Read and CRC-verify one fixed-size record from an open FIL.
+ *
+ * Reads (record_len + 4) bytes from the current file position: the struct
+ * payload followed by its 4-byte CRC32 trailer. Recomputes the CRC over
+ * the payload and compares against the stored value.
+ *
+ * On success the file pointer has advanced by (record_len + 4). On any
+ * error the caller should treat the record as lost and stop processing
+ * (a mid-record power-loss leaves the remainder of the file unreadable at
+ * fixed stride).
+ *
+ * @param fil        Open FIL handle positioned at the start of a record.
+ * @param out        Destination buffer (must be >= record_len bytes).
+ * @param record_len Expected struct size in bytes (without CRC trailer).
+ * @param bytes_read Set to record_len on success, 0 on EOF.
+ *
+ * @retval  0          Record read and CRC verified OK.
+ * @retval -ENODATA    Clean EOF — no more records.
+ * @retval -EBADMSG    CRC mismatch or truncated record — data corrupt.
+ * @retval -EIO        FatFS read error.
+ */
+int read_raw_verify_crc(FIL *fil, uint8_t *out, size_t record_len,
+			UINT *bytes_read)
+{
+	UINT br;
+	FRESULT fr;
+
+	*bytes_read = 0;
+
+	/* Read payload */
+	fr = f_read(fil, out, record_len, &br);
+	if (fr != FR_OK) {
+		return -EIO;
+	}
+	if (br == 0) {
+		return -ENODATA; /* clean EOF */
+	}
+	if (br != record_len) {
+		LOG_WRN("CRC read: short payload (%u of %u) — truncated record",
+			br, (unsigned)record_len);
+		return -EBADMSG;
+	}
+
+	/* Read stored CRC trailer */
+	uint8_t crc_bytes[4];
+	fr = f_read(fil, crc_bytes, sizeof(crc_bytes), &br);
+	if (fr != FR_OK || br != sizeof(crc_bytes)) {
+		LOG_WRN("CRC read: missing CRC trailer — truncated record");
+		return -EBADMSG;
+	}
+
+	uint32_t stored   = (uint32_t)crc_bytes[0]
+			  | ((uint32_t)crc_bytes[1] << 8)
+			  | ((uint32_t)crc_bytes[2] << 16)
+			  | ((uint32_t)crc_bytes[3] << 24);
+	uint32_t computed = crc32_compute(out, record_len);
+
+	if (computed != stored) {
+		LOG_ERR("CRC MISMATCH: stored=0x%08X computed=0x%08X — record corrupt",
+			stored, computed);
+		return -EBADMSG;
+	}
+
+	*bytes_read = (UINT)record_len;
 	return 0;
 }
 

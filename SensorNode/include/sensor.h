@@ -20,12 +20,15 @@
 #define LPS22HB_THREAD_PRIORITY 4
 #define LIST3MDL_THREAD_PRIORITY 5
 #define BME280_THREAD_PRIORITY 3
+#define ENV_THREAD_PRIORITY 3
 #define SAMP_THREAD_PRIORITY 6
 
 #if defined(CONFIG_SENSOR_NODE_1)
 #define DEVICE_ID 1
-#else
+#elif defined(CONFIG_SENSOR_NODE_2)
 #define DEVICE_ID 2
+#else 
+#define DEVICE_ID 3
 #endif
 
 // sensor.h
@@ -65,43 +68,68 @@ struct sensor_blk {
  * can forward millisecond-precision timestamps to Azure.
  */
 struct bme280_msg {
-    double temp_c, rh_pct, press_hPa;
-    uint32_t utc_sec;
-    uint16_t utc_ms;
-};
+    double   temp_c, rh_pct, press_hPa; /* offset 0,  size 24 */
+    uint32_t utc_sec;                    /* offset 24, size 4  */
+    uint16_t utc_ms;                     /* offset 28, size 2  */
+    uint16_t _pad;                       /* offset 30, size 2  */
+    uint64_t uptime_ms;                  /* offset 32, size 8 ✓ */
+};                                       /* total: 40 bytes */
 
 struct ens160_msg {
-    int eco2_ppm, tvoc_ppb, aqi;
-    uint32_t utc_sec;
-    uint16_t utc_ms;
-};
+    int      eco2_ppm, tvoc_ppb, aqi;   /* offset 0,  size 12 */
+    uint32_t utc_sec;                    /* offset 12, size 4  */
+    uint16_t utc_ms;                     /* offset 16, size 2  */
+    uint16_t _pad;                       /* offset 18, size 2  */
+    uint32_t _pad2;                      /* offset 20, size 4  */
+    uint64_t uptime_ms;                  /* offset 24, size 8 ✓ */
+};                                       /* total: 32 bytes */
 
 struct as7343_msg {
-    uint16_t ch[AS7343_NUM_CH];
-    uint32_t utc_sec;
-    uint16_t utc_ms;
-};
+    uint32_t ch[AS7343_NUM_CH];  /* offset 0, size 52 bytes (13 × 4) */
+    uint16_t utc_ms;             /* offset 52, size 2                  */
+    uint16_t _pad;               /* offset 54, size 2                  */
+    uint32_t utc_sec;            /* offset 56, size 4                  */
+    uint32_t _pad2;              /* offset 60, size 4                  */
+    uint64_t uptime_ms;          /* offset 64, size 8                  */
+};                               /* total: 72 bytes                    */
 
-struct batt_msg   {
-    uint16_t mV;
-    uint8_t pct;
-    int16_t rate_x10;
-    uint32_t utc_sec;
-    uint16_t utc_ms;
-};
+// struct as7343_msg {
+//     uint16_t ch[AS7343_NUM_CH];          /* offset 0,  size 36 (if NUM_CH=18) */
+//     uint16_t utc_ms;                     /* offset 36, size 2  */
+//     uint16_t _pad;                       /* offset 38, size 2  */
+//     uint32_t utc_sec;                    /* offset 40, size 4  */
+//     uint32_t _pad2;                      /* offset 44, size 4  */
+//     uint64_t uptime_ms;                  /* offset 48, size 8 ✓ */
+// };                                       /* total: 56 bytes */
+
+struct batt_msg {
+    uint16_t mV;                         /* offset 0,  size 2  */
+    uint8_t  pct;                        /* offset 2,  size 1  */
+    uint8_t  _pad0;                      /* offset 3,  size 1  */
+    int16_t  rate_x10;                   /* offset 4,  size 2  */
+    uint16_t _pad1;                      /* offset 6,  size 2  */
+    uint32_t utc_sec;                    /* offset 8,  size 4  */
+    uint16_t utc_ms;                     /* offset 12, size 2  */
+    uint16_t _pad2;                      /* offset 14, size 2  */
+    uint64_t uptime_ms;                  /* offset 16, size 8 ✓ */
+};                                       /* total: 24 bytes */
 
 struct moisture_msg {
-    uint16_t vwc_x100;
-    uint32_t utc_sec;
-    uint16_t utc_ms;
-};
+    uint16_t vwc_x100;                   /* offset 0,  size 2  */
+    uint16_t utc_ms;                     /* offset 2,  size 2  */
+    uint32_t utc_sec;                    /* offset 4,  size 4  */
+    uint64_t uptime_ms;                  /* offset 8,  size 8 ✓ */
+};                                       /* total: 16 bytes, no padding needed */
 
-struct current_msg { //CURRENT ADDITION
-    int16_t  current_uA;   /* microamps signed — e.g. 1500 = 1.500 mA  */
-    uint16_t voltage_mV;   /* millivolts       — e.g. 3300 = 3.300 V   */
-    uint32_t utc_sec;      /* UTC seconds at measurement (0 = unsynced) */
-    uint16_t utc_ms;       /* UTC milliseconds 0-999                    */
-};
+struct current_msg {
+    int16_t  current_uA;                 /* offset 0,  size 2  */
+    uint16_t voltage_mV;                 /* offset 2,  size 2  */
+    uint32_t utc_sec;                    /* offset 4,  size 4  */
+    uint16_t utc_ms;                     /* offset 8,  size 2  */
+    uint16_t _pad;                       /* offset 10, size 2  */
+    uint32_t _pad2;                      /* offset 12, size 4  */
+    uint64_t uptime_ms;                  /* offset 16, size 8 ✓ */
+};       
 
 /* -------- Message queues -------- */
 #define Q_DEPTH 8
@@ -111,7 +139,6 @@ extern struct k_msgq ens_q;
 extern struct k_msgq as7_q;
 extern struct k_msgq batt_q;
 extern struct k_msgq full_q;
-extern struct k_msgq sound_q;
 extern struct k_msgq moisture_q;
 extern struct k_msgq current_q;  //CURRENT ADDITION
 
@@ -121,8 +148,8 @@ extern void set_logging_file(char* file_abs_path);
 extern void bme280_thread(void);
 extern void ens160_thread(void);
 extern void as7343_thread(void);
+extern void env_thread(void);
 extern void max17048_thread(void);
-extern void combiner_thread(void);
 extern void moisture_thread(void);
 extern void sensor_control_thread(void);
 extern void current_thread(void); //CURRENT ADDITION

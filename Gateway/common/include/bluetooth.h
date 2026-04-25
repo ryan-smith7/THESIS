@@ -27,8 +27,8 @@
 #  define MAX_CONN                 3      /* max simultaneous BLE peripheral connections */
 #else
 #  define BASE_CONTROL_STACK_SIZE  2048
-#  define BASE_PROCESS_STACK_SIZE  6144   /* headroom for 4 KB sound JSON encode */
-#  define MAX_CONN                 4      /* max simultaneous BLE peripheral connections */
+#  define BASE_PROCESS_STACK_SIZE  4096   /* headroom for 4 KB sound JSON encode */
+#  define MAX_CONN                 3     /* max simultaneous BLE peripheral connections */
 #endif
 
 #define BASE_CONTROL_PRIORITY   5

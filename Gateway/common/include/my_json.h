@@ -28,7 +28,8 @@
 #include <stddef.h>
 
 /* ── Buffer sizes ────────────────────────────────────────── */
-#define JSON_ENV_BUF_SIZE    256
+#define JSON_ENS_BUF_SIZE   128
+#define JSON_BME_BUF_SIZE   192
 #define JSON_SPEC_BUF_SIZE   512
 #define JSON_MST_BUF_SIZE    128
 #define JSON_BAT_BUF_SIZE    128
@@ -45,18 +46,25 @@
  * handlers directly from BLE payload bytes (big-endian).
  * ═══════════════════════════════════════════════════════════ */
 
-/** BME280 + ENS160 environment */
+/** BME280 — temperature, humidity, pressure */
 typedef struct {
     uint8_t  dev_id;
-    uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
-    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
-    int16_t  temp_c_x100;
-    int16_t  rh_x100;
-    int32_t  press_hPa_x1000;
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+    int16_t  temp_c_x100;        /* °C × 100          */
+    int16_t  rh_x100;            /* %RH × 100         */
+    int32_t  press_hPa_x1000;    /* hPa × 1000        */
+} mod_bme_t;
+
+/** ENS160 — VOC/eCO2/AQI with compensation values logged */
+typedef struct {
+    uint8_t  dev_id;
+    uint32_t utc_sec;
+    uint16_t utc_ms;
     uint16_t eco2_ppm;
     uint16_t tvoc_ppb;
     uint8_t  aqi;
-} mod_env_t;
+} mod_ens_t;
 
 /** AS7343 spectrum */
 typedef struct {
@@ -108,7 +116,8 @@ typedef struct {
  * Encoders
  * ═══════════════════════════════════════════════════════════ */
 
-int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size);
+int json_encode_bme(const mod_bme_t *m, char *buf, size_t buf_size);
+int json_encode_ens(const mod_ens_t *m, char *buf, size_t buf_size);
 int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size);
 int json_encode_mst(const mod_mst_t *m, char *buf, size_t buf_size);
 int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size);

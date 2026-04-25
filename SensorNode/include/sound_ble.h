@@ -34,6 +34,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/gatt.h>
 #include "sound.h"
+#include "sensor.h"
 
 /* ── Chunking constants ─────────────────────────────────── */
 #define SOUND_BLE_BINS_PER_PKT   116U   /* bins per notification         */
@@ -50,6 +51,9 @@
 #define SOUND_BLE_STACK_SIZE  2048
 #define SOUND_BLE_PRIORITY    6     /* lower than sound_thread (4) */
 
+// extern struct k_sem snd_notify_sem;
+extern struct k_sem snd_drain_sem;
+
 /* ── Public API ─────────────────────────────────────────── */
 
 /**
@@ -64,4 +68,5 @@ extern void sound_ble_thread(void);
  */
 extern void send_spectrum(const struct sound_spec_msg *spec);
 
+extern bool snd_is_connected(void);
 #endif /* SOUND_BLE_H */

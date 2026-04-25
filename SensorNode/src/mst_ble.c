@@ -27,13 +27,15 @@ LOG_MODULE_REGISTER(mst_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xC1
 
-#define MST_BUF_LEN 8  /* was 6 — added 2 bytes for utc_ms */
+#define MST_BUF_LEN 9  /* was 6 — added 2 bytes for utc_ms */
 
 static bool            mst_notify_enabled = false;
 static struct bt_conn *mst_conn           = NULL;
 static uint8_t         mst_buf[MST_BUF_LEN];
 
-MODALITY_CCC_CHANGED(mst, mst_notify_enabled);
+K_SEM_DEFINE(mst_notify_sem, 0, 1);
+
+MODALITY_CCC_CHANGED(mst, mst_notify_enabled, mst_notify_sem);
 MODALITY_READ_HANDLER(mst, mst_buf, MST_BUF_LEN);
 MODALITY_GATT_SERVICE(mst, MST_SVC_UUID_BYTES, MST_CHR_UUID_BYTES);
 
@@ -52,6 +54,7 @@ static void mst_disconnected(struct bt_conn *conn, uint8_t reason) {
     }
 
     mst_notify_enabled = false;
+    k_sem_reset(&mst_notify_sem);
 }
 
 static struct bt_conn_cb mst_conn_cb = {
@@ -59,10 +62,12 @@ static struct bt_conn_cb mst_conn_cb = {
     .disconnected = mst_disconnected,
 };
 
-void mst_pack_and_notify(const struct moisture_msg *msg) {
+bool mst_pack_and_notify(const struct moisture_msg *msg) {
 
     struct bt_conn *conn = mst_conn;
-    if (!conn || !mst_notify_enabled) return;
+    if (!conn || !mst_notify_enabled) {
+        return false;
+    }
 
     mst_buf[0] = (msg->utc_sec   >>  24) & 0xFF;  /* utc_sec [0-3] */
     mst_buf[1] = (msg->utc_sec   >>  16) & 0xFF;
@@ -72,41 +77,43 @@ void mst_pack_and_notify(const struct moisture_msg *msg) {
     mst_buf[5] =  msg->utc_ms            & 0xFF;
     mst_buf[6] = (msg->vwc_x100  >>   8) & 0xFF;  /* vwc     [6-7] */
     mst_buf[7] =  msg->vwc_x100          & 0xFF;
+    mst_buf[8] =  DEVICE_ID;                      /* dev_id  [8]   */
+    
 
     MODALITY_NOTIFY(mst, conn, mst_notify_enabled, mst_buf, MST_BUF_LEN);
+    return true;
 }
 
 void mst_ble_thread(void) {
-
     bt_conn_cb_register(&mst_conn_cb);
     LOG_INF("mst_ble thread ready");
- 
+
     while (1) {
         struct moisture_msg msg;
         if (k_msgq_get(&moisture_q, &msg, K_FOREVER) != 0) {
             continue;
         }
- 
+
+        bool utc_valid = (msg.utc_sec > SD_LOG_UTC_MIN);
+
+        if (mst_notify_enabled && mst_conn && utc_valid) {
+            mst_pack_and_notify(&msg);
 #if defined(CONFIG_SD_LOGGING)
-        if (sd_log_is_draining()) {
-            continue;
-        }
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+            SD_LOG_BOOT(sd_log_boot_path_mst(), &msg);
 #endif
- 
-        if (mst_notify_enabled && mst_conn) {
-            if (msg.utc_sec > SD_LOG_UTC_MIN) {
-                mst_pack_and_notify(&msg);
+#endif
+        } else {
+#if defined(CONFIG_SD_LOGGING)
+            if (utc_valid) {
+                SD_LOG_UTC(SD_LOG_MOISTURE, &msg);
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+                SD_LOG_BOOT(sd_log_boot_path_mst(), &msg);
+#endif
             } else {
-#if defined(CONFIG_SD_LOGGING)
-                /* Connected but no UTC sync — log to SD uptime file */
-                sd_log_mst(&msg);
-#endif
+                SD_LOG_BOOT(sd_log_boot_path_mst(), &msg);
             }
-        }
-#if defined(CONFIG_SD_LOGGING)
-        else {
-            sd_log_mst(&msg);
-        }
 #endif
+        }
     }
 }

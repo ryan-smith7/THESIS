@@ -6,8 +6,10 @@
 #define ENS_BLE_STACK_SIZE  2048
 #define ENS_BLE_PRIORITY    6
 
+extern struct k_sem ens_notify_sem;
+
 extern void ens_ble_thread(void);
 
-extern void ens_pack_and_notify(const struct ens160_msg *msg);
+extern bool ens_pack_and_notify(const struct ens160_msg *msg);
 
 #endif /* ENS_BLE_H */

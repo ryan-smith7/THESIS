@@ -27,13 +27,15 @@ LOG_MODULE_REGISTER(as7_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xA7
 
-#define AS7_BUF_LEN (6 + AS7343_NUM_CH * 2)  /* was 4+26=30, now 6+26=32 */
+#define AS7_BUF_LEN (6 + AS7343_NUM_CH * 2 + 1)  /* was 4+26=30, now 6+26=32 +1 FOR DEVICE*/
 
 static bool            as7_notify_enabled = false;
 static struct bt_conn *as7_conn           = NULL;
 static uint8_t         as7_buf[AS7_BUF_LEN];
 
-MODALITY_CCC_CHANGED(as7, as7_notify_enabled);
+K_SEM_DEFINE(as7_notify_sem, 0, 1);
+
+MODALITY_CCC_CHANGED(as7, as7_notify_enabled, as7_notify_sem);
 MODALITY_READ_HANDLER(as7, as7_buf, AS7_BUF_LEN);
 MODALITY_GATT_SERVICE(as7, AS7_SVC_UUID_BYTES, AS7_CHR_UUID_BYTES);
 
@@ -50,6 +52,7 @@ static void as7_disconnected(struct bt_conn *conn, uint8_t reason) {
     }
     
     as7_notify_enabled = false;
+    k_sem_reset(&as7_notify_sem);
 }
 
 static struct bt_conn_cb as7_conn_cb = {
@@ -57,10 +60,12 @@ static struct bt_conn_cb as7_conn_cb = {
     .disconnected = as7_disconnected,
 };
 
-void as7_pack_and_notify(const struct as7343_msg *msg) {
+bool as7_pack_and_notify(const struct as7343_msg *msg) {
 
     struct bt_conn *conn = as7_conn;
-    if (!conn || !as7_notify_enabled) return;
+    if (!conn || !as7_notify_enabled) {
+        return false;
+    }
 
     as7_buf[0] = (msg->utc_sec >>  24) & 0xFF;  /* utc_sec [0-3] */
     as7_buf[1] = (msg->utc_sec >>  16) & 0xFF;
@@ -73,40 +78,42 @@ void as7_pack_and_notify(const struct as7343_msg *msg) {
         as7_buf[6 + i * 2]     = (msg->ch[i] >> 8) & 0xFF;
         as7_buf[6 + i * 2 + 1] =  msg->ch[i]       & 0xFF;
     }
+    as7_buf[32] =  DEVICE_ID;                      /* dev_id  [32]   */
 
     MODALITY_NOTIFY(as7, conn, as7_notify_enabled, as7_buf, AS7_BUF_LEN);
+    return true;
 }
 
 void as7_ble_thread(void) {
     bt_conn_cb_register(&as7_conn_cb);
     LOG_INF("as7_ble thread ready");
- 
+
     while (1) {
         struct as7343_msg msg;
         if (k_msgq_get(&as7_q, &msg, K_FOREVER) != 0) {
             continue;
         }
- 
+
+        bool utc_valid = (msg.utc_sec > SD_LOG_UTC_MIN);
+
+        if (as7_notify_enabled && as7_conn && utc_valid) {
+            as7_pack_and_notify(&msg);
 #if defined(CONFIG_SD_LOGGING)
-        if (sd_log_is_draining()) {
-            continue;
-        }
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+            SD_LOG_BOOT(sd_log_boot_path_as7(), &msg);
 #endif
- 
-        if (as7_notify_enabled && as7_conn) {
-            if (msg.utc_sec > SD_LOG_UTC_MIN) {
-                as7_pack_and_notify(&msg);
+#endif
+        } else {
+#if defined(CONFIG_SD_LOGGING)
+            if (utc_valid) {
+                SD_LOG_UTC(SD_LOG_AS7343, &msg);
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+                SD_LOG_BOOT(sd_log_boot_path_as7(), &msg);
+#endif
             } else {
-#if defined(CONFIG_SD_LOGGING)
-                /* Connected but no UTC sync — log to SD uptime file */
-                sd_log_as7(&msg);
-#endif
+                SD_LOG_BOOT(sd_log_boot_path_as7(), &msg);
             }
-        }
-#if defined(CONFIG_SD_LOGGING)
-        else {
-            sd_log_as7(&msg);
-        }
 #endif
+        }
     }
 }

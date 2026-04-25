@@ -39,6 +39,8 @@
 
 LOG_MODULE_REGISTER(sound_ble, LOG_LEVEL_INF);
 
+K_SEM_DEFINE(snd_drain_sem, 0, 1);
+
 /* -- State ---------------------------------------------------------- */
 static bool            snd_notify_enabled = false;
 static struct bt_conn *snd_conn           = NULL;
@@ -59,6 +61,9 @@ static struct bt_conn *snd_conn           = NULL;
 static void snd_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     snd_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+    if (snd_notify_enabled) {
+        k_sem_give(&snd_drain_sem);   /* signal drain thread */
+    }
     LOG_INF("Sound spectrum notifications %s",
             snd_notify_enabled ? "enabled" : "disabled");
 }
@@ -105,6 +110,8 @@ static void snd_disconnected(struct bt_conn *conn, uint8_t reason)
         snd_conn = NULL;
     }
     snd_notify_enabled = false;
+
+    k_sem_reset(&snd_drain_sem);
 }
 
 static struct bt_conn_cb snd_conn_cb = {
@@ -127,7 +134,9 @@ static void snd_notify_cb(struct bt_conn *conn, void *user_data)
 
 void send_spectrum(const struct sound_spec_msg *spec) {
     struct bt_conn *conn = snd_conn;
-    if (!snd_notify_enabled || !conn) return;
+    if (!snd_notify_enabled || !conn) {
+        return;
+    }
 
     last_rms_buf[0] = (spec->rms_dbfs_x100 >> 8) & 0xFF;
     last_rms_buf[1] =  spec->rms_dbfs_x100        & 0xFF;
@@ -159,6 +168,7 @@ void send_spectrum(const struct sound_spec_msg *spec) {
         if (pkt == SOUND_BLE_NUM_PKTS - 1) {
             snd_pkt_buf[o++] = (spec->rms_dbfs_x100 >> 8) & 0xFF;
             snd_pkt_buf[o++] =  spec->rms_dbfs_x100        & 0xFF;
+            // snd_pkt_buf[o++] = DEVICE_ID; //hard set though is quick change
         }
 
         memset(&notify_params, 0, sizeof(notify_params));
@@ -183,38 +193,42 @@ void send_spectrum(const struct sound_spec_msg *spec) {
     }
 }
 
-/* -- Sound BLE thread ----------------------------------------------- */
+bool snd_is_connected(void) {
+    return (snd_conn != NULL && snd_notify_enabled);
+}
+
 void sound_ble_thread(void) {
 
     bt_conn_cb_register(&snd_conn_cb);
-    LOG_INF("Sound BLE thread ready -- waiting for spectrum data");
- 
+    LOG_INF("snd_ble thread ready");
+
     while (1) {
-        struct sound_spec_msg spec;
-        if (k_msgq_get(&sound_spec_q, &spec, K_FOREVER) != 0) {
+
+        struct sound_spec_msg msg;
+        if (k_msgq_get(&snd_q, &msg, K_FOREVER) != 0) {
             continue;
         }
- 
+
+        bool utc_valid = (msg.utc_sec > SD_LOG_UTC_MIN);
+
+        if (snd_notify_enabled && snd_conn && utc_valid) {
+            send_spectrum(&msg);
 #if defined(CONFIG_SD_LOGGING)
-        if (sd_log_is_draining()) {
-            continue;
-        }
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+            SD_LOG_BOOT(sd_log_boot_path_snd(), &msg);
 #endif
- 
-        if (snd_notify_enabled && snd_conn) {
-            if (spec.utc_sec > SD_LOG_UTC_MIN) {
-                send_spectrum(&spec);
+#endif
+        } else {
+#if defined(CONFIG_SD_LOGGING)
+            if (utc_valid) {
+                SD_LOG_UTC(SD_LOG_SOUND, &msg);
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+                SD_LOG_BOOT(sd_log_boot_path_snd(), &msg);
+#endif
             } else {
-#if defined(CONFIG_SD_LOGGING)
-                /* Connected but no UTC sync — log to SD uptime file */
-                sd_log_snd(&spec);
-#endif
+                SD_LOG_BOOT(sd_log_boot_path_snd(), &msg);
             }
-        }
-#if defined(CONFIG_SD_LOGGING)
-        else {
-            sd_log_snd(&spec);
-        }
 #endif
+        }
     }
 }

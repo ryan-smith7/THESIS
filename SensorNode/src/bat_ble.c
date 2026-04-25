@@ -39,7 +39,7 @@ static bool            bat_notify_enabled = false;
 static struct bt_conn *bat_conn           = NULL;
 static uint8_t         bat_buf[BAT_BUF_LEN];
 
-MODALITY_CCC_CHANGED(bat, bat_notify_enabled);
+MODALITY_CCC_CHANGED_NOSEM(bat, bat_notify_enabled);
 MODALITY_READ_HANDLER(bat, bat_buf, BAT_BUF_LEN);
 MODALITY_GATT_SERVICE(bat, BAT_SVC_UUID_BYTES, BAT_CHR_UUID_BYTES);
 
@@ -89,16 +89,16 @@ void bat_pack_and_notify(const struct batt_msg *msg) {
 }
 
 void bat_ble_thread(void) {
-
+ 
     bt_conn_cb_register(&bat_conn_cb);
     LOG_INF("bat_ble thread ready");
-
+ 
     while (1) {
         struct batt_msg msg;
         if (k_msgq_get(&batt_q, &msg, K_FOREVER) != 0) {
             continue;
         }
-
+ 
         if (bat_notify_enabled && bat_conn) {
             bat_pack_and_notify(&msg);
         }

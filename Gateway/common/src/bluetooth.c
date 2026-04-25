@@ -5,12 +5,13 @@
  * Each notify handler decodes the utc_sec timestamp from bytes [0-3]
  * then the modality payload from bytes [4+].
  *
- * Payload lengths (all include 4-byte uptime_ms prefix):
- *   BME: 12  (4 + temp(2) + rh(2) + press(4))
- *   ENS:  9  (4 + eco2(2) + tvoc(2) + aqi(1))
- *   AS7: 30  (4 + 13×uint16)
- *   MST:  6  (4 + vwc(2))
- *   BAT:  9  (4 + mV(2) + pct(1) + rate(2))
+ * Payload lengths (all include utc_sec(4) + utc_ms(2) prefix):
+ *   BME: 14  (4 + 2 + temp(2) + rh(2) + press(4))
+ *   ENS: 11  (4 + 2 + eco2(2) + tvoc(2) + aqi(1))
+ *   AS7: 32  (4 + 2 + 13×uint16(26))
+ *   MST:  8  (4 + 2 + vwc(2))
+ *   BAT: 12  (4 + 2 + mV(2) + pct(1) + rate(2) + dev_id(1))
+ *   CUR: 10  (4 + 2 + current_uA(2) + voltage_mV(2))
  *
  * Bytes [0-3] now carry utc_sec (UTC seconds at measurement)
  * rather than uptime_ms. The sensor node stamps this via time_sync_get_utc().
@@ -37,14 +38,14 @@
 #define MSGQ_MAX_MSGS   4
 
 /* ── Payload lengths ─────────────────────────────────────── */
-#define CUR_PAYLOAD_LEN   10   /* utc_sec(4)+utc_ms(2)+current_uA(2)+voltage_mV(2) */
-#define BME_PAYLOAD_LEN  14  /* +2 for utc_ms */
-#define ENS_PAYLOAD_LEN  11  /* +2 for utc_ms */
-#define AS7_PAYLOAD_LEN  32  /* +2 for utc_ms */
-#define MST_PAYLOAD_LEN   8  /* +2 for utc_ms */
+#define CUR_PAYLOAD_LEN   11   /* utc_sec(4)+utc_ms(2)+current_uA(2)+voltage_mV(2) */
+#define BME_PAYLOAD_LEN  15  /* +2 for utc_ms */
+#define ENS_PAYLOAD_LEN  12  /* +2 for utc_ms */
+#define AS7_PAYLOAD_LEN  33  /* +2 for utc_ms */
+#define MST_PAYLOAD_LEN   9  /* +2 for utc_ms */
 #define BAT_PAYLOAD_LEN  12  /* +2 for utc_ms */
 
-#define SOUND_NUM_BINS     348
+#define SOUND_NUM_BINS     348 //need to add 1 for device if sending through
 #define SOUND_BINS_PER_PKT 116
 #define SOUND_NUM_PKTS     3
 #define SOUND_HDR_SIZE     8   /* pkt_id(1)+total(1)+utc_sec(4)+utc_ms(2) */
@@ -122,11 +123,6 @@ DECL_MOD(mst);
 DECL_MOD(bat);
 DECL_MOD(cur);
 
-/* Environment accumulator — merge BME + ENS before enqueuing */
-static mod_env_t env_acc[MAX_CONN];
-static bool      env_bme_ready[MAX_CONN];
-static bool      env_ens_ready[MAX_CONN];
-
 /* Sound reassembly */
 struct sound_reassembly {
     uint16_t bins[SOUND_NUM_BINS];
@@ -138,7 +134,8 @@ struct sound_reassembly {
 static struct sound_reassembly sound_rx[MAX_CONN];
 
 /* ── Message queues ─────────────────────────────────────── */
-K_MSGQ_DEFINE(env_msgq, sizeof(mod_env_t),  MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(bme_msgq, sizeof(mod_bme_t),  MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(ens_msgq, sizeof(mod_ens_t),  MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(as7_msgq, sizeof(mod_spec_t), MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(mst_msgq, sizeof(mod_mst_t),  MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(bat_msgq, sizeof(mod_bat_t),  MSGQ_MAX_MSGS, 4);
@@ -230,74 +227,59 @@ static inline int32_t be32s(const uint8_t *b) {
  * Value is 0 if the sensor node has not yet received a time sync.
  * ═══════════════════════════════════════════════════════════ */
 
-/* ── BME280 (12 bytes: uptime(4) + temp(2) + rh(2) + press(4)) ──────── */
+/* ── BME280 ──────── */
 static uint8_t bme_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
                                 const void *data, uint16_t length) {
-
     if (!data || length != BME_PAYLOAD_LEN) {
         return BT_GATT_ITER_CONTINUE;
     }
-
     int idx = get_conn_index(conn);
-
     if (idx < 0) {
         return BT_GATT_ITER_CONTINUE;
     }
 
     const uint8_t *d = data;
-    env_acc[idx].utc_sec          = be32(d + 0);
-    env_acc[idx].utc_ms           = be16(d + 4);   /* NEW */
-    env_acc[idx].temp_c_x100      = be16s(d + 6);
-    env_acc[idx].rh_x100          = be16s(d + 8);
-    env_acc[idx].press_hPa_x1000  = be32s(d + 10);
-    env_bme_ready[idx] = true;
+    mod_bme_t msg;
+    msg.utc_sec        = be32(d + 0);
+    msg.utc_ms         = be16(d + 4);
+    msg.temp_c_x100    = be16s(d + 6);
+    msg.rh_x100        = be16s(d + 8);
+    msg.press_hPa_x1000 = be32s(d + 10);
+    msg.dev_id   = d[14];          /* dev_id from sensor node — identifies which node */
 
-    if (env_ens_ready[idx]) {
-        env_ens_ready[idx] = false;
-        env_bme_ready[idx] = false;
-        if (k_msgq_put(&env_msgq, &env_acc[idx], K_NO_WAIT) != 0) {
-            LOG_WRN("[BME %d] env queue full", idx);
-        }
+    if (k_msgq_put(&bme_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[BME %d] queue full", idx);
     }
     return BT_GATT_ITER_CONTINUE;
 }
 
-/* ── ENS160 (9 bytes: uptime(4) + eco2(2) + tvoc(2) + aqi(1)) ───────── */
+/* ── ENS160 ───────── */
 static uint8_t ens_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
                                 const void *data, uint16_t length) {
-
     if (!data || length != ENS_PAYLOAD_LEN) {
         return BT_GATT_ITER_CONTINUE;
     }
-
     int idx = get_conn_index(conn);
-
     if (idx < 0) {
         return BT_GATT_ITER_CONTINUE;
     }
 
     const uint8_t *d = data;
-    /* Use ENS utc_sec only if BME hasn't arrived yet */
-    if (!env_bme_ready[idx]) {
-        env_acc[idx].utc_sec = be32(d + 0);
-    }
-    env_acc[idx].eco2_ppm = be16(d + 4);
-    env_acc[idx].tvoc_ppb = be16(d + 6);
-    env_acc[idx].aqi      = d[8];
-    env_ens_ready[idx] = true;
+    mod_ens_t msg;
+    msg.utc_sec  = be32(d + 0);
+    msg.utc_ms   = be16(d + 4);
+    msg.eco2_ppm = be16(d + 6);
+    msg.tvoc_ppb = be16(d + 8);
+    msg.aqi      = d[10];
+    msg.dev_id   = d[11];          /* dev_id from sensor node — identifies which node */
 
-    if (env_bme_ready[idx]) {
-        env_bme_ready[idx] = false;
-        env_ens_ready[idx] = false;
-        if (k_msgq_put(&env_msgq, &env_acc[idx], K_NO_WAIT) != 0) {
-            LOG_WRN("[ENS %d] env queue full", idx);
-        }
+    if (k_msgq_put(&ens_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[ENS %d] queue full", idx);
     }
     return BT_GATT_ITER_CONTINUE;
 }
-
 /* ── AS7343 (30 bytes: uptime(4) + 13×uint16(26)) ────────────────────── */
 static uint8_t as7_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
@@ -315,12 +297,12 @@ static uint8_t as7_notify_func(struct bt_conn *conn,
 
     const uint8_t *d = data;
     mod_spec_t msg;
-    msg.dev_id  = (uint8_t)idx;
     msg.utc_sec = be32(d + 0);
     msg.utc_ms  = be16(d + 4);   /* NEW */
     for (int i = 0; i < AS7343_NUM_CH; i++) {
         msg.ch[i] = be16(d + 6 + i * 2);
     }
+    msg.dev_id   = d[32];          /* dev_id from sensor node — identifies which node */
 
     if (k_msgq_put(&as7_msgq, &msg, K_NO_WAIT) != 0) {
         LOG_WRN("[AS7 %d] queue full", idx);
@@ -342,10 +324,10 @@ static uint8_t mst_notify_func(struct bt_conn *conn,
 
     const uint8_t *d = data;
     mod_mst_t msg;
-    msg.dev_id   = (uint8_t)idx;
     msg.utc_sec  = be32(d + 0);
     msg.utc_ms   = be16(d + 4);   /* NEW */
     msg.vwc_x100 = be16(d + 6);
+    msg.dev_id   = d[8];          /* dev_id from sensor node — identifies which node */
 
     if (k_msgq_put(&mst_msgq, &msg, K_NO_WAIT) != 0) {
         LOG_WRN("[MST %d] queue full", idx);
@@ -395,11 +377,11 @@ static uint8_t cur_notify_func(struct bt_conn *conn,
  
     const uint8_t *d = data;
     mod_cur_t msg;
-    msg.dev_id      = (uint8_t)idx;
     msg.utc_sec     = be32(d + 0);
     msg.utc_ms      = be16(d + 4);
     msg.current_uA  = be16s(d + 6);
     msg.voltage_mV  = be16(d + 8);
+    msg.dev_id   = d[10];          /* dev_id from sensor node — identifies which node */
  
     if (k_msgq_put(&cur_msgq, &msg, K_NO_WAIT) != 0) {
         LOG_WRN("[CUR %d] queue full", idx);
@@ -458,7 +440,7 @@ static uint8_t sound_notify_func(struct bt_conn *conn,
     if (rx->received == 0x07) {
         struct sound_queue_pkt_t qpkt;
         memset(&qpkt, 0, sizeof(qpkt));
-        qpkt.sp.dev_id        = (uint8_t)index;
+        qpkt.sp.dev_id        = 1;
         qpkt.sp.utc_sec       = rx->utc_sec;   /* UTC from sensor node */
         qpkt.sp.utc_ms        = rx->utc_ms;    /* UTC ms — NEW */
         qpkt.sp.rms_dbfs_x100 = rx->rms_dbfs_x100;
@@ -697,10 +679,6 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     LOG_INF("[BASE] Connected [%d]: %s", index, addr);
 
     memset(&sound_rx[index], 0, sizeof(sound_rx[index]));
-    memset(&env_acc[index],  0, sizeof(env_acc[index]));
-    env_bme_ready[index] = false;
-    env_ens_ready[index] = false;
-    env_acc[index].dev_id = (uint8_t)index;
 
     mtu_params[index].func = exchange_func;
     bt_gatt_exchange_mtu(conn, &mtu_params[index]);
@@ -724,8 +702,6 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
         mst_char_handles[index]    = 0;
         bat_char_handles[index]    = 0;
         cur_char_handles[index]    = 0;
-        env_bme_ready[index]       = false;
-        env_ens_ready[index]       = false;
         memset(&sound_rx[index], 0, sizeof(sound_rx[index]));
     }
     start_scan();
@@ -751,13 +727,15 @@ K_THREAD_STACK_DEFINE(process_stack, PROCESS_STACK_SIZE);
 
 #if defined(CONFIG_ESP_SPIRAM)
 static char s_cur_json[JSON_CUR_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
-static char s_env_json[JSON_ENV_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
+static char s_bme_json[JSON_BME_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
+static char s_ens_json[JSON_ENS_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_as7_json[JSON_SPEC_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static char s_mst_json[JSON_MST_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_bat_json[JSON_BAT_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_snd_json[JSON_SND_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 #else
-static char s_env_json[JSON_ENV_BUF_SIZE];
+static char s_bme_json[JSON_BME_BUF_SIZE];
+static char s_ens_json[JSON_ENS_BUF_SIZE];
 static char s_as7_json[JSON_SPEC_BUF_SIZE];
 static char s_mst_json[JSON_MST_BUF_SIZE];
 static char s_bat_json[JSON_BAT_BUF_SIZE];
@@ -798,15 +776,27 @@ void process_data_thread(void) {
         }
 
         /* ── Environment ──────────────────────────────────── */
-        mod_env_t env_msg;
-        if (k_msgq_get(&env_msgq, &env_msg, K_MSEC(5)) == 0) {
-            int ret = json_encode_env(&env_msg, s_env_json, sizeof(s_env_json));
+        /* ── BME280 ───────────────────────────────────────── */
+        mod_bme_t bme_msg;
+        if (k_msgq_get(&bme_msgq, &bme_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_bme(&bme_msg, s_bme_json, sizeof(s_bme_json));
             if (ret > 0) {
-                LOG_INF("env JSON");
-                // LOG_INF("env JSON: %s", s_env_JSON);
-                azure_mqtt_publish(s_env_json);
+                LOG_INF("bme JSON");
+                azure_mqtt_publish(s_bme_json);
             } else {
-                LOG_ERR("env JSON encode failed (%d)", ret);
+                LOG_ERR("bme JSON encode failed (%d)", ret);
+            }
+        }
+
+        /* ── ENS160 ───────────────────────────────────────── */
+        mod_ens_t ens_msg;
+        if (k_msgq_get(&ens_msgq, &ens_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_ens(&ens_msg, s_ens_json, sizeof(s_ens_json));
+            if (ret > 0) {
+                LOG_INF("ens JSON");
+                azure_mqtt_publish(s_ens_json);
+            } else {
+                LOG_ERR("ens JSON encode failed (%d)", ret);
             }
         }
 
@@ -850,7 +840,7 @@ void process_data_thread(void) {
         /* ── Sound spectrum (throttled 1:10) ─────────────── */ //CHANGE THE THROTTLE!!!!!
         struct sound_queue_pkt_t sqpkt;
         if (k_msgq_get(&sound_msgq, &sqpkt, K_MSEC(5)) == 0) {
-            if (++sound_throttle >= 10) {
+            if (++sound_throttle >= 0) {
                 sound_throttle = 0;
                 int ret = json_encode_snd(&sqpkt.sp, s_snd_json, sizeof(s_snd_json));
                 if (ret > 0) {

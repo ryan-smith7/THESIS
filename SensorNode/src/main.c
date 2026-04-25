@@ -7,19 +7,26 @@
 #include <zephyr/drivers/sensor/ens160.h>
  
 #include "sensor.h"
-#include "as7343.h"
 #include "bluetooth.h"
-#include "sound.h"
-#include "sound_ble.h"
  
 /* ── New modality BLE headers ──────────────────────────── */
+#if defined(CONFIG_SENSOR_NODE_1)
+#include "sound.h"
+#include "sound_ble.h"
 #include "bme_ble.h"
 #include "ens_ble.h"
+#elif defined(CONFIG_SENSOR_NODE_2)
+#include "as7343.h"
 #include "as7_ble.h"
 #include "mst_ble.h"
-#include "bat_ble.h"
+#elif defined(CONFIG_SENSOR_NODE_3)
 #include "cur_ble.h"
- 
+#endif
+
+#if defined(CONFIG_FUEL_GAUGE)
+#include "bat_ble.h"
+#endif
+
 #include <zephyr/types.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/logging/log.h>
@@ -65,13 +72,17 @@ K_THREAD_DEFINE(bat_ble_tid, BAT_BLE_STACK_SIZE, bat_ble_thread,
 #if defined(CONFIG_SENSOR_NODE_1)
 
 /* Sensor acquisition threads */
-K_THREAD_DEFINE(bme280_tid, STACK_SIZE_SENSOR, bme280_thread,
-                NULL, NULL, NULL,
-                BME280_THREAD_PRIORITY, 0, 0);
+// K_THREAD_DEFINE(bme280_tid, STACK_SIZE_SENSOR, bme280_thread,
+//                 NULL, NULL, NULL,
+//                 BME280_THREAD_PRIORITY, 0, 0);
 
-K_THREAD_DEFINE(ens160_tid, STACK_SIZE_SENSOR, ens160_thread,
+// K_THREAD_DEFINE(ens160_tid, STACK_SIZE_SENSOR, ens160_thread,
+//                 NULL, NULL, NULL,
+//                 BME280_THREAD_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(envtid, STACK_SIZE_SENSOR, env_thread,
                 NULL, NULL, NULL,
-                BME280_THREAD_PRIORITY, 0, 0);
+                ENV_THREAD_PRIORITY, 0, 0);
 
 K_THREAD_DEFINE(sound_tid, SOUND_STACK_SIZE, sound_thread,
                 NULL, NULL, NULL,
@@ -102,7 +113,7 @@ K_THREAD_DEFINE(moisture_tid, STACK_SIZE_SENSOR, moisture_thread,
                 NULL, NULL, NULL,
                 BME280_THREAD_PRIORITY, 0, 0);
 
-/* BLE modality threads */
+// /* BLE modality threads */
 K_THREAD_DEFINE(as7_ble_tid, AS7_BLE_STACK_SIZE, as7_ble_thread,
                 NULL, NULL, NULL,
                 AS7_BLE_PRIORITY, 0, 0);
@@ -126,7 +137,3 @@ K_THREAD_DEFINE(cur_ble_tid, CUR_BLE_STACK_SIZE, cur_ble_thread,
 #error "No sensor node selected. Set CONFIG_SENSOR_NODE_1=y or CONFIG_SENSOR_NODE_2=y,  CONFIG_SENSOR_NODE_3=y in prj.conf"
 
 #endif
-
-// K_THREAD_DEFINE(combiner_tid, STACK_SIZE_SENSOR, combiner_thread,
-//                 NULL, NULL, NULL,
-//                 BME280_THREAD_PRIORITY, 0, 0);

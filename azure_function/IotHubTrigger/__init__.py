@@ -40,11 +40,6 @@ def _parse_iso(ts_raw: str):
 
 
 def _sensor_timestamp(msg: dict):
-    """
-    Reconstruct a UTC datetime from utc_sec + utc_ms stamped on the sensor node.
-    Falls back to datetime.utcnow() if utc_sec is zero or below the 2023 threshold
-    (meaning the sensor had not yet received a time sync and sent uptime seconds).
-    """
     utc_sec = _to_int(msg.get("utc_sec"), 0)
     utc_ms  = _to_int(msg.get("utc_ms"),  0)
     if utc_sec > 1_700_000_000:
@@ -56,10 +51,8 @@ def _connect():
     server   = os.environ.get("SQL_SERVER",   "iot-telemetry-server-ryan-smith.database.windows.net")
     database = os.environ.get("SQL_DATABASE", "iot-telemetry-db")
     password = os.environ.get("SQL_PASSWORD")
-
     if not password:
         raise RuntimeError("Missing SQL_PASSWORD environment variable")
-
     conn_str = (
         "DRIVER={ODBC Driver 18 for SQL Server};"
         f"SERVER={server};"
@@ -77,129 +70,185 @@ def _connect():
 
 def _detect_type(msg: dict) -> str:
     logger.warning("TOP LEVEL KEYS: %s", list(msg.keys()))
-
     header = msg.get("header", {}) or {}
     if header.get("messageType"):
         return header["messageType"]
-
-    if "environment" in msg:
-        return "environment"
-    if "spectrum" in msg:
-        return "spectrum"
-    if "soil" in msg:
-        return "soil"
-    if "battery" in msg:
-        return "battery"
-    if "sound" in msg:
-        return "sound"
-    if "current" in msg:
-        return "current"
-
+    if "bme280"      in msg: return "bme280"
+    if "ens160"      in msg: return "ens160"
+    if "environment" in msg: return "environment"   # legacy combined
+    if "spectrum"    in msg: return "spectrum"
+    if "soil"        in msg: return "soil"
+    if "battery"     in msg: return "battery"
+    if "sound"       in msg: return "sound"
+    if "current"     in msg: return "current"
     return "unknown"
 
 
 # ── Modality handlers ─────────────────────────────────────────────────────────
+#
+# All handlers use MERGE (SQL Server upsert) instead of plain INSERT.
+# Deduplication key: device_id + timestamp (derived from utc_sec/utc_ms).
+#
+# This handles two re-send scenarios:
+#   1. SD drain resume — sensor node re-sends records from file start after
+#      a power cycle mid-drain (position is RAM-only, lost on reboot)
+#   2. Event Hub at-least-once delivery — Azure may deliver the same event
+#      to multiple Function instances simultaneously
+#
+# WHEN NOT MATCHED — insert the row (first time seen)
+# WHEN MATCHED     — no-op (already exists, silently skip)
+#
+# Requires unique indexes on each table:
+#   CREATE UNIQUE INDEX UX_bme280_device_time  ON telemetry_bme280  (device_id, timestamp);
+#   CREATE UNIQUE INDEX UX_ens160_device_time  ON telemetry_ens160  (device_id, timestamp);
+#   CREATE UNIQUE INDEX UX_spectrum_device_time ON telemetry_spectrum (device_id, timestamp);
+#   CREATE UNIQUE INDEX UX_soil_device_time    ON telemetry_soil    (device_id, timestamp);
+#   CREATE UNIQUE INDEX UX_battery_device_time ON telemetry_battery (device_id, timestamp);
+#   CREATE UNIQUE INDEX UX_sound_device_time   ON telemetry_sound   (device_id, received_time);
+#   CREATE UNIQUE INDEX UX_current_device_time ON telemetry_current (device_id, timestamp);
 
-def _handle_environment(cursor, msg: dict, body: str):
-    # batt_mV removed — battery arrives via its own dedicated modality
-    device_id        = msg.get("deviceId", "unknown")
-    timestamp        = _sensor_timestamp(msg)
 
-    env = msg.get("environment", {}) or {}
-    temperature_c    = _to_float(env.get("temperature_c"),    0.0)
-    humidity_percent = _to_float(env.get("humidity_percent"), 0.0)
-    pressure_hpa     = _to_float(env.get("pressure_hpa"),     0.0)
-    eco2_ppm         = _to_int(env.get("eco2_ppm"),           0)
-    tvoc_ppb         = _to_int(env.get("tvoc_ppb"),           0)
-    aqi              = _to_int(env.get("aqi"),                0)
+def _handle_bme280(cursor, msg: dict, body: str):
+    device_id = msg.get("deviceId", "unknown")
+    timestamp = _sensor_timestamp(msg)
+    bme       = msg.get("bme280", {}) or {}
+
+    temperature_c    = _to_float(bme.get("temperature_c"),    0.0)
+    humidity_percent = _to_float(bme.get("humidity_percent"), 0.0)
+    pressure_hpa     = _to_float(bme.get("pressure_hpa"),     0.0)
 
     cursor.execute(
         """
-        INSERT INTO telemetry (
-            device_id, timestamp, uptime_ms, proto_ver,
-            temperature_c, humidity_percent, pressure_hpa,
-            eco2_ppm, tvoc_ppb, aqi,
-            as7343_405nm, as7343_425nm, as7343_450nm, as7343_475nm,
-            as7343_515nm, as7343_550nm, as7343_555nm, as7343_600nm,
-            as7343_640nm, as7343_690nm, as7343_745nm, as7343_855nm,
-            as7343_visible,
-            snd_rms_dbfs, snd_peak_freq_hz, snd_peak_mag,
-            soil_vwc_percent,
-            gateway_id, message_id, raw_payload
-        ) VALUES (
-            ?, ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL,
-            NULL, NULL, NULL,
-            NULL,
-            ?, ?, ?
-        )
+        MERGE telemetry_bme280 AS target
+        USING (VALUES (?, ?, ?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                temperature_c, humidity_percent, pressure_hpa,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                temperature_c, humidity_percent, pressure_hpa,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.temperature_c, source.humidity_percent, source.pressure_hpa,
+                source.gateway_id, source.raw_payload
+            );
         """,
-        device_id, timestamp, None, None,
+        device_id, timestamp,
         temperature_c, humidity_percent, pressure_hpa,
-        eco2_ppm, tvoc_ppb, aqi,
-        'GW-01', '', body
+        'GW-01', body
     )
-    logger.info("env inserted: dev=%s T=%.2f RH=%.2f", device_id, temperature_c, humidity_percent)
+    logger.info("bme280 upserted: dev=%s T=%.2f RH=%.2f P=%.3f",
+                device_id, temperature_c, humidity_percent, pressure_hpa)
+
+
+def _handle_ens160(cursor, msg: dict, body: str):
+    device_id = msg.get("deviceId", "unknown")
+    timestamp = _sensor_timestamp(msg)
+    ens       = msg.get("ens160", {}) or {}
+
+    eco2 = _to_int(ens.get("eco2_ppm"), 0)
+    tvoc = _to_int(ens.get("tvoc_ppb"), 0)
+    aqi  = _to_int(ens.get("aqi"),      0)
+
+    cursor.execute(
+        """
+        MERGE telemetry_ens160 AS target
+        USING (VALUES (?, ?, ?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                eco2_ppm, tvoc_ppb, aqi,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                eco2_ppm, tvoc_ppb, aqi,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.eco2_ppm, source.tvoc_ppb, source.aqi,
+                source.gateway_id, source.raw_payload
+            );
+        """,
+        device_id, timestamp,
+        eco2, tvoc, aqi,
+        'GW-01', body
+    )
+    logger.info("ens160 upserted: dev=%s eCO2=%d TVOC=%d AQI=%d",
+                device_id, eco2, tvoc, aqi)
 
 
 def _handle_spectrum(cursor, msg: dict, body: str):
-    device_id  = msg.get("deviceId", "unknown")
-    timestamp  = _sensor_timestamp(msg)
+    device_id = msg.get("deviceId", "unknown")
+    timestamp = _sensor_timestamp(msg)
+    spec      = msg.get("spectrum", {}) or {}
 
-    spec = msg.get("spectrum", {}) or {}
-    as7343_405 = _to_int(spec.get("AS7343_405nm"),  0)
-    as7343_425 = _to_int(spec.get("AS7343_425nm"),  0)
-    as7343_450 = _to_int(spec.get("AS7343_450nm"),  0)
-    as7343_475 = _to_int(spec.get("AS7343_475nm"),  0)
-    as7343_515 = _to_int(spec.get("AS7343_515nm"),  0)
-    as7343_550 = _to_int(spec.get("AS7343_550nm"),  0)
-    as7343_555 = _to_int(spec.get("AS7343_555nm"),  0)
-    as7343_600 = _to_int(spec.get("AS7343_600nm"),  0)
-    as7343_640 = _to_int(spec.get("AS7343_640nm"),  0)
-    as7343_690 = _to_int(spec.get("AS7343_690nm"),  0)
-    as7343_745 = _to_int(spec.get("AS7343_745nm"),  0)
-    as7343_855 = _to_int(spec.get("AS7343_855nm"),  0)
-    as7343_vis = _to_int(spec.get("AS7343_VISIBLE"), 0)
+    ch = [
+        _to_int(spec.get("AS7343_405nm"),   0),
+        _to_int(spec.get("AS7343_425nm"),   0),
+        _to_int(spec.get("AS7343_450nm"),   0),
+        _to_int(spec.get("AS7343_475nm"),   0),
+        _to_int(spec.get("AS7343_515nm"),   0),
+        _to_int(spec.get("AS7343_550nm"),   0),
+        _to_int(spec.get("AS7343_555nm"),   0),
+        _to_int(spec.get("AS7343_600nm"),   0),
+        _to_int(spec.get("AS7343_640nm"),   0),
+        _to_int(spec.get("AS7343_690nm"),   0),
+        _to_int(spec.get("AS7343_745nm"),   0),
+        _to_int(spec.get("AS7343_855nm"),   0),
+        _to_int(spec.get("AS7343_VISIBLE"), 0),
+    ]
 
     cursor.execute(
         """
-        INSERT INTO telemetry (
-            device_id, timestamp, uptime_ms, proto_ver,
-            temperature_c, humidity_percent, pressure_hpa,
-            eco2_ppm, tvoc_ppb, aqi, batt_mv,
-            as7343_405nm, as7343_425nm, as7343_450nm, as7343_475nm,
-            as7343_515nm, as7343_550nm, as7343_555nm, as7343_600nm,
-            as7343_640nm, as7343_690nm, as7343_745nm, as7343_855nm,
-            as7343_visible,
-            snd_rms_dbfs, snd_peak_freq_hz, snd_peak_mag,
-            soil_vwc_percent,
-            gateway_id, message_id, raw_payload
-        ) VALUES (
-            ?, ?, ?, ?,
-            NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?,
-            NULL, NULL, NULL,
-            NULL,
-            ?, ?, ?
-        )
+        MERGE telemetry_spectrum AS target
+        USING (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                AS7343_405nm, AS7343_425nm, AS7343_450nm, AS7343_475nm,
+                AS7343_515nm, AS7343_550nm, AS7343_555nm, AS7343_600nm,
+                AS7343_640nm, AS7343_690nm, AS7343_745nm, AS7343_855nm,
+                AS7343_visible,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                AS7343_405nm, AS7343_425nm, AS7343_450nm, AS7343_475nm,
+                AS7343_515nm, AS7343_550nm, AS7343_555nm, AS7343_600nm,
+                AS7343_640nm, AS7343_690nm, AS7343_745nm, AS7343_855nm,
+                AS7343_visible,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.AS7343_405nm, source.AS7343_425nm,
+                source.AS7343_450nm, source.AS7343_475nm,
+                source.AS7343_515nm, source.AS7343_550nm,
+                source.AS7343_555nm, source.AS7343_600nm,
+                source.AS7343_640nm, source.AS7343_690nm,
+                source.AS7343_745nm, source.AS7343_855nm,
+                source.AS7343_visible,
+                source.gateway_id, source.raw_payload
+            );
         """,
-        device_id, timestamp, None, None,
-        as7343_405, as7343_425, as7343_450, as7343_475,
-        as7343_515, as7343_550, as7343_555, as7343_600,
-        as7343_640, as7343_690, as7343_745, as7343_855,
-        as7343_vis,
-        'GW-01', '', body
+        device_id, timestamp,
+        *ch,
+        'GW-01', body
     )
-    logger.info("spectrum inserted: dev=%s 450nm=%d vis=%d", device_id, as7343_450, as7343_vis)
+    logger.info("spectrum upserted: dev=%s 450nm=%d", device_id, ch[2])
 
 
 def _handle_soil(cursor, msg: dict, body: str):
@@ -210,231 +259,161 @@ def _handle_soil(cursor, msg: dict, body: str):
 
     cursor.execute(
         """
-        INSERT INTO telemetry (
-            device_id, timestamp, uptime_ms, proto_ver,
-            temperature_c, humidity_percent, pressure_hpa,
-            eco2_ppm, tvoc_ppb, aqi, batt_mv,
-            as7343_405nm, as7343_425nm, as7343_450nm, as7343_475nm,
-            as7343_515nm, as7343_550nm, as7343_555nm, as7343_600nm,
-            as7343_640nm, as7343_690nm, as7343_745nm, as7343_855nm,
-            as7343_visible,
-            snd_rms_dbfs, snd_peak_freq_hz, snd_peak_mag,
-            soil_vwc_percent,
-            gateway_id, message_id, raw_payload
-        ) VALUES (
-            ?, ?, ?, ?,
-            NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL,
-            NULL, NULL, NULL,
-            ?,
-            ?, ?, ?
-        )
+        MERGE telemetry_soil AS target
+        USING (VALUES (?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                soil_vwc_percent,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                soil_vwc_percent,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.soil_vwc_percent,
+                source.gateway_id, source.raw_payload
+            );
         """,
-        device_id, timestamp, None, None,
+        device_id, timestamp,
         soil_vwc_percent,
-        'GW-01', '', body
+        'GW-01', body
     )
-    logger.info("soil inserted: dev=%s vwc=%.2f", device_id, soil_vwc_percent)
+    logger.info("soil upserted: dev=%s vwc=%.2f", device_id, soil_vwc_percent)
 
 
 def _handle_battery(cursor, msg: dict, body: str):
-    # sensor_dev_id comes from inside the battery object — the physical device
-    # ID stamped by the sensor node, used to separate Node 1 vs Node 2 in Grafana.
-    bat           = msg.get("battery", {}) or {}
-    sensor_dev_id = _to_int(bat.get("sensor_dev_id"), 0)
-    device_id     = f"dev-{sensor_dev_id}" if sensor_dev_id else msg.get("deviceId", "unknown")
-    timestamp     = _sensor_timestamp(msg)
-    batt_mv       = _to_int(bat.get("mV"),           0)
-    batt_pct      = _to_int(bat.get("pct"),           0)
-    batt_rate     = _to_float(bat.get("rate_pct_hr"), 0.0)
+    device_id = msg.get("deviceId", "unknown")
+    timestamp = _sensor_timestamp(msg)
+    bat       = msg.get("battery", {}) or {}
+
+    batt_mv      = _to_int(bat.get("mV"),            0)
+    batt_pct     = _to_int(bat.get("pct"),           0)
+    rate_pct_hr  = _to_float(bat.get("rate_pct_hr"), 0.0)
 
     cursor.execute(
         """
-        INSERT INTO telemetry (
-            device_id, timestamp, uptime_ms, proto_ver,
-            temperature_c, humidity_percent, pressure_hpa,
-            eco2_ppm, tvoc_ppb, aqi, batt_mv,
-            as7343_405nm, as7343_425nm, as7343_450nm, as7343_475nm,
-            as7343_515nm, as7343_550nm, as7343_555nm, as7343_600nm,
-            as7343_640nm, as7343_690nm, as7343_745nm, as7343_855nm,
-            as7343_visible,
-            snd_rms_dbfs, snd_peak_freq_hz, snd_peak_mag,
-            soil_vwc_percent,
-            batt_pct, batt_rate_pct_hr,
-            gateway_id, message_id, raw_payload
-        ) VALUES (
-            ?, ?, ?, ?,
-            NULL, NULL, NULL,
-            NULL, NULL, NULL, ?,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL,
-            NULL,
-            NULL, NULL, NULL,
-            NULL,
-            ?, ?,
-            ?, ?, ?
-        )
+        MERGE telemetry_battery AS target
+        USING (VALUES (?, ?, ?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                batt_mv, batt_pct, rate_pct_hr,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                batt_mv, batt_pct, rate_pct_hr,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.batt_mv, source.batt_pct, source.rate_pct_hr,
+                source.gateway_id, source.raw_payload
+            );
         """,
-        device_id, timestamp, None, None,
-        batt_mv,
-        batt_pct, batt_rate,
-        'GW-01', '', body
+        device_id, timestamp,
+        batt_mv, batt_pct, rate_pct_hr,
+        'GW-01', body
     )
-    logger.info("battery inserted: dev=%s mV=%d pct=%d rate=%.1f ts=%s",
-                device_id, batt_mv, batt_pct, batt_rate, timestamp)
+    logger.info("battery upserted: dev=%s mV=%d pct=%d",
+                device_id, batt_mv, batt_pct)
 
 
 def _handle_sound(cursor, msg: dict, body: str):
-    if "sound" in msg:
-        device_id = msg.get("deviceId", "unknown")
-        snd       = msg.get("sound", {}) or {}
-        rms_dbfs  = _to_float(snd.get("rms_dbfs"),  0.0)
-        peak_freq = _to_int(snd.get("peak_freq_hz"), 0)
-        peak_mag  = _to_float(snd.get("peak_mag"),   0.0)
-        bins      = snd.get("bins", []) or []
-        bin_low   = 43
-        bin_res   = 43
-        timestamp = _sensor_timestamp(msg)
-    else:
-        payload   = msg.get("payload", {}) or {}
-        device_id = payload.get("deviceId", "unknown")
-        rms_dbfs  = _to_float(payload.get("rms_dbfs"), 0.0)
-        bin_low   = _to_int(payload.get("bin_low_hz"), 43)
-        bin_res   = _to_int(payload.get("bin_res_hz"), 43)
-        bins      = payload.get("bins", []) or []
-        peak_freq = 0
-        peak_mag  = 0.0
-        timestamp = datetime.utcnow()
+    device_id = msg.get("deviceId", "unknown")
+    snd       = msg.get("sound", {}) or {}
+    rms_dbfs  = _to_float(snd.get("rms_dbfs"), 0.0)
+    bins      = snd.get("bins", []) or []
+    timestamp = _sensor_timestamp(msg)
 
     cursor.execute(
         """
-        INSERT INTO telemetry_sound (
-            device_id, received_time,
-            uptime_ms, rms_dbfs,
-            bin_low_hz, bin_res_hz,
-            bins_json,
-            gateway_id, message_id,
-            schema_version, message_type,
-            raw_payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        MERGE telemetry_sound AS target
+        USING (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?))
+            AS source (
+                device_id, received_time,
+                uptime_ms, rms_dbfs,
+                bin_low_hz, bin_res_hz,
+                bins_json,
+                gateway_id, message_id,
+                schema_version, message_type,
+                raw_payload
+            )
+        ON  target.device_id    = source.device_id
+        AND target.received_time = source.received_time
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, received_time,
+                uptime_ms, rms_dbfs,
+                bin_low_hz, bin_res_hz,
+                bins_json,
+                gateway_id, message_id,
+                schema_version, message_type,
+                raw_payload
+            )
+            VALUES (
+                source.device_id, source.received_time,
+                source.uptime_ms, source.rms_dbfs,
+                source.bin_low_hz, source.bin_res_hz,
+                source.bins_json,
+                source.gateway_id, source.message_id,
+                source.schema_version, source.message_type,
+                source.raw_payload
+            );
         """,
         device_id, timestamp, None, rms_dbfs,
-        bin_low, bin_res, json.dumps(bins),
+        43, 43, json.dumps(bins),
         'GW-01', '', '1', 'sound', body[:4000]
     )
-    logger.info("sound inserted: dev=%s rms=%.2f bins=%d", device_id, rms_dbfs, len(bins))
+    logger.info("sound upserted: dev=%s rms=%.2f bins=%d",
+                device_id, rms_dbfs, len(bins))
 
 
 def _handle_current(cursor, msg: dict, body: str):
     device_id  = msg.get("deviceId", "unknown")
     timestamp  = _sensor_timestamp(msg)
     cur        = msg.get("current", {}) or {}
-    current_mA = _to_float(cur.get("current_mA"), 0.0)
-    voltage_mV = _to_int(cur.get("voltage_mV"),   0)
+
+    current_ma = _to_float(cur.get("current_mA"), 0.0)
+    voltage_mv = _to_int(cur.get("voltage_mV"),   0)
 
     cursor.execute(
         """
-        INSERT INTO telemetry_current (
-            device_id, timestamp,
-            current_mA, voltage_mV,
-            gateway_id, raw_payload
-        ) VALUES (?, ?, ?, ?, ?, ?)
+        MERGE telemetry_current AS target
+        USING (VALUES (?, ?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                current_mA, voltage_mV,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                current_mA, voltage_mV,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.current_mA, source.voltage_mV,
+                source.gateway_id, source.raw_payload
+            );
         """,
         device_id, timestamp,
-        current_mA, voltage_mV,
+        current_ma, voltage_mv,
         'GW-01', body
     )
-    logger.info("current inserted: dev=%s ts=%s mA=%.3f mV=%d",
-                device_id, timestamp, current_mA, voltage_mV)
-
-
-def _handle_legacy_telemetry(cursor, msg: dict, body: str):
-    header  = msg.get("header",  {}) or {}
-    payload = msg.get("payload", {}) or {}
-
-    message_id = header.get("messageId", "")
-    gateway_id = header.get("gatewayId", "GW-01")
-
-    device_id  = payload.get("deviceId", "unknown")
-    timestamp  = _parse_iso(payload.get("timestamp", ""))
-    uptime_ms  = _to_int(payload.get("uptime_ms"), 0)
-    proto_ver  = _to_int(payload.get("proto_ver"), 0)
-
-    env = payload.get("environment", {}) or {}
-    temperature_c    = _to_float(env.get("temperature_c"),    0.0)
-    humidity_percent = _to_float(env.get("humidity_percent"), 0.0)
-    pressure_hpa     = _to_float(env.get("pressure_hpa"),     0.0)
-    eco2_ppm         = _to_int(env.get("eco2_ppm"),           0)
-    tvoc_ppb         = _to_int(env.get("tvoc_ppb"),           0)
-    aqi              = _to_int(env.get("aqi"),                0)
-    batt_mv          = _to_int(env.get("batt_mV"),            0)
-
-    spec = payload.get("spectrum", {}) or {}
-    as7343_405 = _to_int(spec.get("AS7343_405nm"),  0)
-    as7343_425 = _to_int(spec.get("AS7343_425nm"),  0)
-    as7343_450 = _to_int(spec.get("AS7343_450nm"),  0)
-    as7343_475 = _to_int(spec.get("AS7343_475nm"),  0)
-    as7343_515 = _to_int(spec.get("AS7343_515nm"),  0)
-    as7343_550 = _to_int(spec.get("AS7343_550nm"),  0)
-    as7343_555 = _to_int(spec.get("AS7343_555nm"),  0)
-    as7343_600 = _to_int(spec.get("AS7343_600nm"),  0)
-    as7343_640 = _to_int(spec.get("AS7343_640nm"),  0)
-    as7343_690 = _to_int(spec.get("AS7343_690nm"),  0)
-    as7343_745 = _to_int(spec.get("AS7343_745nm"),  0)
-    as7343_855 = _to_int(spec.get("AS7343_855nm"),  0)
-    as7343_vis = _to_int(spec.get("AS7343_VISIBLE"), 0)
-
-    snd = payload.get("sound", {}) or {}
-    snd_rms_dbfs  = _to_float(snd.get("rms_dbfs"),   0.0)
-    snd_peak_freq = _to_int(snd.get("peak_freq_hz"),  0)
-    snd_peak_mag  = _to_float(snd.get("peak_mag"),    0.0)
-
-    soil = payload.get("soil", {}) or {}
-    soil_vwc_percent = _to_float(soil.get("vwc_percent"), 0.0)
-
-    cursor.execute(
-        """
-        INSERT INTO telemetry (
-            device_id, timestamp, uptime_ms, proto_ver,
-            temperature_c, humidity_percent, pressure_hpa,
-            eco2_ppm, tvoc_ppb, aqi, batt_mv,
-            as7343_405nm, as7343_425nm, as7343_450nm, as7343_475nm,
-            as7343_515nm, as7343_550nm, as7343_555nm, as7343_600nm,
-            as7343_640nm, as7343_690nm, as7343_745nm, as7343_855nm,
-            as7343_visible,
-            snd_rms_dbfs, snd_peak_freq_hz, snd_peak_mag,
-            soil_vwc_percent,
-            gateway_id, message_id, raw_payload
-        ) VALUES (
-            ?, ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?,
-            ?, ?, ?,
-            ?,
-            ?, ?, ?
-        )
-        """,
-        device_id, timestamp, uptime_ms, proto_ver,
-        temperature_c, humidity_percent, pressure_hpa,
-        eco2_ppm, tvoc_ppb, aqi, batt_mv,
-        as7343_405, as7343_425, as7343_450, as7343_475,
-        as7343_515, as7343_550, as7343_555, as7343_600,
-        as7343_640, as7343_690, as7343_745, as7343_855,
-        as7343_vis,
-        snd_rms_dbfs, snd_peak_freq, snd_peak_mag,
-        soil_vwc_percent,
-        gateway_id, message_id, body
-    )
-    logger.info("legacy telemetry inserted: dev=%s ts=%s", device_id, timestamp)
+    logger.info("current upserted: dev=%s mA=%.3f mV=%d",
+                device_id, current_ma, voltage_mv)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -449,50 +428,32 @@ def main(events) -> None:
         logger.error("Failed to connect to SQL: %s", e, exc_info=True)
         return
 
-    counts = {"environment": 0, "spectrum": 0, "soil": 0,
-              "battery": 0, "sound": 0, "current": 0, "legacy": 0, "skipped": 0}
+    counts = {
+        "bme280": 0, "ens160": 0,
+        "environment": 0, "spectrum": 0, "soil": 0,
+        "battery": 0, "sound": 0, "current": 0,
+        "legacy": 0, "skipped": 0
+    }
 
     for event in events:
         try:
-            body = event.get_body().decode("utf-8", errors="ignore")
+            body   = event.get_body().decode("utf-8", errors="ignore")
             logger.info("Message body prefix: %s", body[:200])
-
             parsed = json.loads(body)
 
-            # Handle both batched array and single object
             messages = parsed if isinstance(parsed, list) else [parsed]
 
             for msg in messages:
                 msg_type = _detect_type(msg)
 
-                if msg_type == "environment":
-                    _handle_environment(cursor, msg, body)
-                    counts["environment"] += 1
-
-                elif msg_type == "spectrum":
-                    _handle_spectrum(cursor, msg, body)
-                    counts["spectrum"] += 1
-
-                elif msg_type == "soil":
-                    _handle_soil(cursor, msg, body)
-                    counts["soil"] += 1
-
-                elif msg_type == "battery":
-                    _handle_battery(cursor, msg, body)
-                    counts["battery"] += 1
-
+                if   msg_type == "bme280":      _handle_bme280(cursor, msg, body);   counts["bme280"]   += 1
+                elif msg_type == "ens160":       _handle_ens160(cursor, msg, body);   counts["ens160"]   += 1
+                elif msg_type == "spectrum":     _handle_spectrum(cursor, msg, body); counts["spectrum"] += 1
+                elif msg_type == "soil":         _handle_soil(cursor, msg, body);     counts["soil"]     += 1
+                elif msg_type == "battery":      _handle_battery(cursor, msg, body);  counts["battery"]  += 1
                 elif msg_type in ("sound", "sound_spectrum"):
-                    _handle_sound(cursor, msg, body)
-                    counts["sound"] += 1
-
-                elif msg_type == "current":
-                    _handle_current(cursor, msg, body)
-                    counts["current"] += 1
-
-                elif msg_type == "telemetry":
-                    _handle_legacy_telemetry(cursor, msg, body)
-                    counts["legacy"] += 1
-
+                                                 _handle_sound(cursor, msg, body);    counts["sound"]    += 1
+                elif msg_type == "current":      _handle_current(cursor, msg, body);  counts["current"]  += 1
                 else:
                     logger.warning("Unknown message type '%s' — skipping. Body: %s",
                                    msg_type, body[:200])
@@ -512,7 +473,8 @@ def main(events) -> None:
             pass
 
     logger.warning(
-        "Batch complete — env=%d spec=%d soil=%d bat=%d snd=%d cur=%d legacy=%d skipped=%d",
-        counts["environment"], counts["spectrum"], counts["soil"],
-        counts["battery"], counts["sound"], counts["current"], counts["legacy"], counts["skipped"]
+        "Batch complete — bme=%d ens=%d env=%d spec=%d soil=%d bat=%d snd=%d cur=%d legacy=%d skipped=%d",
+        counts["bme280"], counts["ens160"], counts["environment"],
+        counts["spectrum"], counts["soil"], counts["battery"],
+        counts["sound"], counts["current"], counts["legacy"], counts["skipped"]
     )

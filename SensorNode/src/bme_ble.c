@@ -29,13 +29,15 @@ LOG_MODULE_REGISTER(bme_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xB0
 
-#define BME_BUF_LEN 14  /* was 12 — added 2 bytes for utc_ms */
+#define BME_BUF_LEN 15  /* was 12 — added 2 bytes for utc_ms +1 FOR DEVICE ID */
 
 static bool            bme_notify_enabled = false;
 static struct bt_conn *bme_conn           = NULL;
 static uint8_t         bme_buf[BME_BUF_LEN];
 
-MODALITY_CCC_CHANGED(bme, bme_notify_enabled);
+K_SEM_DEFINE(bme_notify_sem, 0, 1);
+
+MODALITY_CCC_CHANGED(bme, bme_notify_enabled, bme_notify_sem);
 MODALITY_READ_HANDLER(bme, bme_buf, BME_BUF_LEN);
 MODALITY_GATT_SERVICE(bme, BME_SVC_UUID_BYTES, BME_CHR_UUID_BYTES);
 
@@ -54,6 +56,7 @@ static void bme_disconnected(struct bt_conn *conn, uint8_t reason) {
     }
 
     bme_notify_enabled = false;
+    k_sem_reset(&bme_notify_sem);
 }
 
 static struct bt_conn_cb bme_conn_cb = {
@@ -61,10 +64,12 @@ static struct bt_conn_cb bme_conn_cb = {
     .disconnected = bme_disconnected,
 };
 
-void bme_pack_and_notify(const struct bme280_msg *msg) {
+bool bme_pack_and_notify(const struct bme280_msg *msg) {
 
     struct bt_conn *conn = bme_conn;
-    if (!conn || !bme_notify_enabled) return;
+    if (!conn || !bme_notify_enabled) {
+        return false;
+    }
 
     int16_t temp  = (int16_t)(msg->temp_c    * 100.0);
     int16_t rh    = (int16_t)(msg->rh_pct    * 100.0);
@@ -84,41 +89,43 @@ void bme_pack_and_notify(const struct bme280_msg *msg) {
     bme_buf[11] = (press >> 16) & 0xFF;
     bme_buf[12] = (press >>  8) & 0xFF;
     bme_buf[13] =  press        & 0xFF;
+    bme_buf[14] =  DEVICE_ID;                      /* dev_id  [14]   */
 
     MODALITY_NOTIFY(bme, conn, bme_notify_enabled, bme_buf, BME_BUF_LEN);
+    return true;
 }
 
 void bme_ble_thread(void) {
-
     bt_conn_cb_register(&bme_conn_cb);
     LOG_INF("bme_ble thread ready");
- 
+
     while (1) {
+        /* No drain wait — live data flows alongside drain */
         struct bme280_msg msg;
         if (k_msgq_get(&bme_q, &msg, K_FOREVER) != 0) {
             continue;
         }
- 
+
+        bool utc_valid = (msg.utc_sec > SD_LOG_UTC_MIN);
+
+        if (bme_notify_enabled && bme_conn && utc_valid) {
+            bme_pack_and_notify(&msg);
 #if defined(CONFIG_SD_LOGGING)
-        if (sd_log_is_draining()) {
-            continue;
-        }
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+            SD_LOG_BOOT(sd_log_boot_path_bme(), &msg);
 #endif
- 
-        if (bme_notify_enabled && bme_conn) {
-            if (msg.utc_sec > SD_LOG_UTC_MIN) {
-                bme_pack_and_notify(&msg);
+#endif
+        } else {
+#if defined(CONFIG_SD_LOGGING)
+            if (utc_valid) {
+                SD_LOG_UTC(SD_LOG_BME280, &msg);   /* not connected — write UTC file */
+#if defined(CONFIG_SD_LOG_ALWAYS_WRITE)
+                SD_LOG_BOOT(sd_log_boot_path_bme(), &msg);
+#endif
             } else {
-#if defined(CONFIG_SD_LOGGING)
-                /* Connected but no UTC sync — log to SD uptime file */
-                sd_log_bme(&msg);
-#endif
+                SD_LOG_BOOT(sd_log_boot_path_bme(), &msg);
             }
-        }
-#if defined(CONFIG_SD_LOGGING)
-        else {
-            sd_log_bme(&msg);
-        }
 #endif
+        }
     }
 }

@@ -81,4 +81,9 @@ extern int write_raw_to_file(const char *fname, const uint8_t *data,
  */
 extern void file_control_thread(void);
 
+extern int read_raw_verify_crc(FIL *fil, uint8_t *out, size_t record_len,
+			UINT *bytes_read);
+
+void to_fatfs_path(const char *zpath, char *fatpath, size_t maxlen);
+
 #endif /* FILE_H */

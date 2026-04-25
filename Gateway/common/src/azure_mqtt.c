@@ -35,7 +35,7 @@ LOG_MODULE_REGISTER(azure_mqtt, LOG_LEVEL_INF);
 #define MQTT_QUEUE_MAX_LEN   4096  /* max single message — sound JSON */
 
 #if defined(CONFIG_ESP_SPIRAM)
-#define MQTT_RING_BUF_SIZE   2 * MQTT_QUEUE_MAX_LEN
+#define MQTT_RING_BUF_SIZE   8 * MQTT_QUEUE_MAX_LEN
 static uint8_t mqtt_ring_data[MQTT_RING_BUF_SIZE]
     __attribute__((section(".ext_ram.bss")));
 #else
@@ -282,7 +282,7 @@ void azure_mqtt_thread(void) {
         /* Poll for incoming MQTT packets and send keepalives */
         fds.fd     = client.transport.tcp.sock;
         fds.events = ZSOCK_POLLIN;
-        if (zsock_poll(&fds, 1, 100) > 0) {
+        if (zsock_poll(&fds, 1, 20) > 0) {
             mqtt_input(&client);
         }
         mqtt_live(&client);

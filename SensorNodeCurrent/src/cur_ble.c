@@ -14,8 +14,8 @@
 
 #include "cur_ble.h"
 #include "modality_ble.h"
-#include "sd_log.h"
 
+#define LOG_UTC_MIN  1700000000U
 LOG_MODULE_REGISTER(cur_ble, LOG_LEVEL_INF);
 
 #define CUR_SVC_UUID_BYTES \
@@ -28,7 +28,7 @@ LOG_MODULE_REGISTER(cur_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xCC
 
-#define CUR_BUF_LEN 10  /* utc_sec(4) + utc_ms(2) + current_uA(2) + voltage_mV(2) */
+#define CUR_BUF_LEN 11  /* utc_sec(4) + utc_ms(2) + current_uA(2) + voltage_mV(2) */
 
 static bool            cur_notify_enabled = false;
 static struct bt_conn *cur_conn           = NULL;
@@ -76,6 +76,7 @@ void cur_pack_and_notify(const struct current_msg *msg) {
     cur_buf[7] =  msg->current_uA        & 0xFF;
     cur_buf[8] = (msg->voltage_mV >>  8) & 0xFF;  /* voltage [8-9] */
     cur_buf[9] =  msg->voltage_mV        & 0xFF;
+    cur_buf[10] =  3;                      /* dev_id  [10]   */
 
     MODALITY_NOTIFY(cur, conn, cur_notify_enabled, cur_buf, CUR_BUF_LEN);
 }
@@ -92,7 +93,7 @@ void cur_ble_thread(void) {
         }
 
         if (cur_notify_enabled && cur_conn) {
-            if (msg.utc_sec > SD_LOG_UTC_MIN) {
+            if (msg.utc_sec > LOG_UTC_MIN) {
                 cur_pack_and_notify(&msg);
             } else {
                 /* Connected but no UTC sync yet — drop rather than

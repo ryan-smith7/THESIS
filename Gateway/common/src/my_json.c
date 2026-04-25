@@ -17,8 +17,8 @@
 
 LOG_MODULE_REGISTER(json_module, LOG_LEVEL_INF);
 
-/* ── json_encode_env ─────────────────────────────────────── */
-int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size) {
+/* ── json_encode_bme ─────────────────────────────────────── */
+int json_encode_bme(const mod_bme_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
 
     return snprintk(buf, buf_size,
@@ -26,10 +26,31 @@ int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size) {
           "\"deviceId\":\"dev-%u\","
           "\"utc_sec\":%u,"
           "\"utc_ms\":%u,"
-          "\"environment\":{"
+          "\"bme280\":{"
             "\"temperature_c\":%.2f,"
             "\"humidity_percent\":%.2f,"
-            "\"pressure_hpa\":%.3f,"
+            "\"pressure_hpa\":%.3f"
+          "}"
+        "}",
+        (unsigned)m->dev_id,
+        (unsigned)m->utc_sec,
+        (unsigned)m->utc_ms,
+        (double)m->temp_c_x100     / 100.0,
+        (double)m->rh_x100         / 100.0,
+        (double)m->press_hPa_x1000 / 1000.0
+    );
+}
+
+/* ── json_encode_ens ─────────────────────────────────────── */
+int json_encode_ens(const mod_ens_t *m, char *buf, size_t buf_size) {
+    if (!m || !buf) return -EINVAL;
+
+    return snprintk(buf, buf_size,
+        "{"
+          "\"deviceId\":\"dev-%u\","
+          "\"utc_sec\":%u,"
+          "\"utc_ms\":%u,"
+          "\"ens160\":{"
             "\"eco2_ppm\":%u,"
             "\"tvoc_ppb\":%u,"
             "\"aqi\":%u"
@@ -38,9 +59,6 @@ int json_encode_env(const mod_env_t *m, char *buf, size_t buf_size) {
         (unsigned)m->dev_id,
         (unsigned)m->utc_sec,
         (unsigned)m->utc_ms,
-        (double)m->temp_c_x100    / 100.0,
-        (double)m->rh_x100        / 100.0,
-        (double)m->press_hPa_x1000 / 1000.0,
         (unsigned)m->eco2_ppm,
         (unsigned)m->tvoc_ppb,
         (unsigned)m->aqi
@@ -135,9 +153,9 @@ int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size) {
     );
 }
 
-/* ── json_encode_snd ─────────────────────────────────────── */
 int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size) {
     if (!m || !buf) return -EINVAL;
+
 
     int pos = snprintk(buf, buf_size,
         "{"
@@ -146,23 +164,24 @@ int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size) {
           "\"utc_ms\":%u,"
           "\"sound\":{"
             "\"rms_dbfs\":%.2f,"
-            "\"peak_freq_hz\":%u,"
-            "\"peak_mag\":%.1f,"
             "\"bins\":[",
         (unsigned)m->dev_id,
         (unsigned)m->utc_sec,
         (unsigned)m->utc_ms,
-        (double)m->rms_dbfs_x100 / 100.0,
-        (unsigned)m->peak_freq_hz,
-        (double)m->peak_mag_x10  / 10.0
+        ((double)m->rms_dbfs_x100 / 100.0) + 120
     );
+
+    LOG_INF("bin[0] raw=%u decoded=%.2f", m->bins[0],
+        (double)m->bins[0] / 100.0); //NOT -120 AS IS 94db at -26dbfs therefore +120 gets to db spl
+    
 
     if (pos <= 0 || (size_t)pos >= buf_size) return -ENOMEM;
 
     for (int i = 0; i < SOUND_NUM_BINS; i++) {
+        double db = (double)m->bins[i] / 100.0;
         int w = snprintk(buf + pos, buf_size - pos,
-                         (i < SOUND_NUM_BINS - 1) ? "%.1f," : "%.1f",
-                         (double)m->bins[i] / 10.0);
+                         (i < SOUND_NUM_BINS - 1) ? "%.2f," : "%.2f",
+                         db);
         if (w <= 0 || (size_t)(pos + w) >= buf_size) {
             LOG_ERR("Sound JSON overflow at bin %d", i);
             return -ENOMEM;
