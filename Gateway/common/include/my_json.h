@@ -35,6 +35,7 @@
 #define JSON_BAT_BUF_SIZE    128
 #define JSON_SND_BUF_SIZE   3072
 #define JSON_CUR_BUF_SIZE    128   /* current sensor                   */
+#define JSON_DS18B20_BUF_SIZE  128
 
 /* ── Channel / bin counts ────────────────────────────────── */
 #define AS7343_NUM_CH  13
@@ -70,9 +71,10 @@ typedef struct {
 typedef struct {
     uint8_t  dev_id;
     uint32_t utc_sec;           /* UTC seconds at measurement (0 = unsynced) */
-    uint16_t utc_ms;            /* UTC milliseconds 0-999                   */
-    uint16_t ch[AS7343_NUM_CH];
+    uint16_t utc_ms;            /* UTC milliseconds 0-999                    */
+    uint32_t ch[AS7343_NUM_CH]; /* µW/m² per channel — was uint16 raw counts */
 } mod_spec_t;
+
 
 /** Soil moisture */
 typedef struct {
@@ -112,6 +114,14 @@ typedef struct {
     uint16_t voltage_mV;     /* millivolts, e.g. 3300 = 3.300 V          */
 } mod_cur_t;
 
+typedef struct {
+    uint32_t utc_sec;
+    uint16_t utc_ms;
+    int16_t  temp_val1;   /* integer °C */
+    int16_t  temp_val2;   /* centidegrees fractional — e.g. 62 = 0.62°C */
+    uint8_t  dev_id;
+} mod_ds18b20_t;
+
 /* ═══════════════════════════════════════════════════════════
  * Encoders
  * ═══════════════════════════════════════════════════════════ */
@@ -123,5 +133,6 @@ int json_encode_mst(const mod_mst_t *m, char *buf, size_t buf_size);
 int json_encode_bat(const mod_bat_t *m, char *buf, size_t buf_size);
 int json_encode_snd(const mod_snd_t *m, char *buf, size_t buf_size);
 int json_encode_cur(const mod_cur_t *m, char *buf, size_t buf_size);
+int json_encode_ds18b20(const mod_ds18b20_t *m, char *buf, size_t buf_size);
 
 #endif /* MY_JSON_H */

@@ -19,6 +19,7 @@
 #include "as7343.h"
 #include "as7_ble.h"
 #include "mst_ble.h"
+#include "ds18b20_ble.h"
 #elif defined(CONFIG_SENSOR_NODE_3)
 #include "cur_ble.h"
 #endif
@@ -113,6 +114,10 @@ K_THREAD_DEFINE(moisture_tid, STACK_SIZE_SENSOR, moisture_thread,
                 NULL, NULL, NULL,
                 BME280_THREAD_PRIORITY, 0, 0);
 
+K_THREAD_DEFINE(soil_temp_tid, STACK_SIZE_SENSOR, ds18b20_thread,
+                NULL, NULL, NULL,
+                BME280_THREAD_PRIORITY, 0, 0);
+
 // /* BLE modality threads */
 K_THREAD_DEFINE(as7_ble_tid, AS7_BLE_STACK_SIZE, as7_ble_thread,
                 NULL, NULL, NULL,
@@ -121,6 +126,10 @@ K_THREAD_DEFINE(as7_ble_tid, AS7_BLE_STACK_SIZE, as7_ble_thread,
 K_THREAD_DEFINE(mst_ble_tid, MST_BLE_STACK_SIZE, mst_ble_thread,
                 NULL, NULL, NULL,
                 MST_BLE_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(ds18b20_ble_tid, DS18B20_BLE_STACK_SIZE, ds18b20_ble_thread,
+                NULL, NULL, NULL,
+                DS18B20_BLE_PRIORITY, 0, 0);
 
 #elif defined(CONFIG_SENSOR_NODE_3)
                 /* Sensor acquisition thread */

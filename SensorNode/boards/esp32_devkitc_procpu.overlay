@@ -121,3 +121,26 @@ i2s_rxtx: &i2s0 {
         };
     };
 };
+
+
+#include <zephyr/dt-bindings/pinctrl/esp32-pinctrl.h>
+
+&pinctrl {
+    uart2_default_w1: uart2_default_w1 {
+        group1 {
+            pinmux = <UART2_TX_GPIO17>;
+            bias-pull-up;
+        };
+        group2 {
+            pinmux = <UART2_RX_GPIO16>;
+            bias-pull-up;
+        };
+    };
+};
+
+&uart2 {
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart2_default_w1>;
+    pinctrl-names = "default";
+};

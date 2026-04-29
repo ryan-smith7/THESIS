@@ -66,28 +66,30 @@ int json_encode_ens(const mod_ens_t *m, char *buf, size_t buf_size) {
 }
 
 /* ── json_encode_spec ────────────────────────────────────── */
-int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size) {
+int json_encode_spec(const mod_spec_t *m, char *buf, size_t buf_size)
+{
     if (!m || !buf) return -EINVAL;
-
+ 
     return snprintk(buf, buf_size,
         "{"
           "\"deviceId\":\"dev-%u\","
           "\"utc_sec\":%u,"
           "\"utc_ms\":%u,"
+          "\"spectrum_unit\":\"uW/m2\","
           "\"spectrum\":{"
-            "\"AS7343_405nm\":%u,"
-            "\"AS7343_425nm\":%u,"
-            "\"AS7343_450nm\":%u,"
-            "\"AS7343_475nm\":%u,"
-            "\"AS7343_515nm\":%u,"
-            "\"AS7343_550nm\":%u,"
-            "\"AS7343_555nm\":%u,"
-            "\"AS7343_600nm\":%u,"
-            "\"AS7343_640nm\":%u,"
-            "\"AS7343_690nm\":%u,"
-            "\"AS7343_745nm\":%u,"
-            "\"AS7343_855nm\":%u,"
-            "\"AS7343_VISIBLE\":%u"
+            "\"405nm\":%u,"
+            "\"425nm\":%u,"
+            "\"450nm\":%u,"
+            "\"475nm\":%u,"
+            "\"515nm\":%u,"
+            "\"550nm\":%u,"
+            "\"555nm\":%u,"
+            "\"600nm\":%u,"
+            "\"640nm\":%u,"
+            "\"690nm\":%u,"
+            "\"745nm\":%u,"
+            "\"855nm\":%u,"
+            "\"VIS\":%u"
           "}"
         "}",
         (unsigned)m->dev_id,
@@ -212,5 +214,27 @@ int json_encode_cur(const mod_cur_t *m, char *buf, size_t buf_size) {
         (unsigned)m->utc_ms,
         (double)m->current_uA / 1000.0,
         (unsigned)m->voltage_mV
+    );
+}
+
+int json_encode_ds18b20(const mod_ds18b20_t *m, char *buf, size_t buf_size) {
+    if (!m || !buf) return -EINVAL;
+ 
+    /* Reconstruct float from val1 + val2 (centidegrees) */
+    double temp = (double)m->temp_val1 + (double)m->temp_val2 / 100.0;
+ 
+    return snprintk(buf, buf_size,
+        "{"
+          "\"deviceId\":\"dev-%u\","
+          "\"utc_sec\":%u,"
+          "\"utc_ms\":%u,"
+          "\"soil_temperature\":{"
+            "\"temperature_c\":%.4f"
+          "}"
+        "}",
+        (unsigned)m->dev_id,
+        (unsigned)m->utc_sec,
+        (unsigned)m->utc_ms,
+        temp
     );
 }

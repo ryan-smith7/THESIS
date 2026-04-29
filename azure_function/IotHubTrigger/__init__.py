@@ -77,6 +77,7 @@ def _detect_type(msg: dict) -> str:
     if "ens160"      in msg: return "ens160"
     if "environment" in msg: return "environment"   # legacy combined
     if "spectrum"    in msg: return "spectrum"
+    if "soil_temperature" in msg: return "soil_temperature"
     if "soil"        in msg: return "soil"
     if "battery"     in msg: return "battery"
     if "sound"       in msg: return "sound"
@@ -192,23 +193,27 @@ def _handle_spectrum(cursor, msg: dict, body: str):
     device_id = msg.get("deviceId", "unknown")
     timestamp = _sensor_timestamp(msg)
     spec      = msg.get("spectrum", {}) or {}
-
+ 
+    # Receive µW/m² integers, convert to mW/m² floats for SQL storage
+    def uW_to_mW(key):
+        return _to_int(spec.get(key), 0) / 1000.0
+ 
     ch = [
-        _to_int(spec.get("AS7343_405nm"),   0),
-        _to_int(spec.get("AS7343_425nm"),   0),
-        _to_int(spec.get("AS7343_450nm"),   0),
-        _to_int(spec.get("AS7343_475nm"),   0),
-        _to_int(spec.get("AS7343_515nm"),   0),
-        _to_int(spec.get("AS7343_550nm"),   0),
-        _to_int(spec.get("AS7343_555nm"),   0),
-        _to_int(spec.get("AS7343_600nm"),   0),
-        _to_int(spec.get("AS7343_640nm"),   0),
-        _to_int(spec.get("AS7343_690nm"),   0),
-        _to_int(spec.get("AS7343_745nm"),   0),
-        _to_int(spec.get("AS7343_855nm"),   0),
-        _to_int(spec.get("AS7343_VISIBLE"), 0),
+        uW_to_mW("405nm"),
+        uW_to_mW("425nm"),
+        uW_to_mW("450nm"),
+        uW_to_mW("475nm"),
+        uW_to_mW("515nm"),
+        uW_to_mW("550nm"),
+        uW_to_mW("555nm"),
+        uW_to_mW("600nm"),
+        uW_to_mW("640nm"),
+        uW_to_mW("690nm"),
+        uW_to_mW("745nm"),
+        uW_to_mW("855nm"),
+        uW_to_mW("VIS"),
     ]
-
+ 
     cursor.execute(
         """
         MERGE telemetry_spectrum AS target
@@ -248,9 +253,11 @@ def _handle_spectrum(cursor, msg: dict, body: str):
         *ch,
         'GW-01', body
     )
-    logger.info("spectrum upserted: dev=%s 450nm=%d", device_id, ch[2])
-
-
+    logger.info(
+        "spectrum upserted: dev=%s 450nm=%.3f mW/m2 VIS=%.3f mW/m2",
+        device_id, ch[2], ch[12]
+    )
+ 
 def _handle_soil(cursor, msg: dict, body: str):
     device_id        = msg.get("deviceId", "unknown")
     timestamp        = _sensor_timestamp(msg)
@@ -286,6 +293,40 @@ def _handle_soil(cursor, msg: dict, body: str):
     )
     logger.info("soil upserted: dev=%s vwc=%.2f", device_id, soil_vwc_percent)
 
+def _handle_soil_temperature(cursor, msg: dict, body: str):
+    device_id   = msg.get("deviceId", "unknown")
+    timestamp   = _sensor_timestamp(msg)
+    soil_temp   = msg.get("soil_temperature", {}) or {}
+    temperature = _to_float(soil_temp.get("temperature_c"), 0.0)
+ 
+    cursor.execute(
+        """
+        MERGE telemetry_soil_temperature AS target
+        USING (VALUES (?, ?, ?, ?, ?))
+            AS source (
+                device_id, timestamp,
+                temperature_c,
+                gateway_id, raw_payload
+            )
+        ON  target.device_id = source.device_id
+        AND target.timestamp = source.timestamp
+        WHEN NOT MATCHED THEN
+            INSERT (
+                device_id, timestamp,
+                temperature_c,
+                gateway_id, raw_payload
+            )
+            VALUES (
+                source.device_id, source.timestamp,
+                source.temperature_c,
+                source.gateway_id, source.raw_payload
+            );
+        """,
+        device_id, timestamp,
+        temperature,
+        'GW-01', body
+    )
+    logger.info("soil_temperature upserted: dev=%s T=%.4f", device_id, temperature)
 
 def _handle_battery(cursor, msg: dict, body: str):
     device_id = msg.get("deviceId", "unknown")
@@ -430,7 +471,8 @@ def main(events) -> None:
 
     counts = {
         "bme280": 0, "ens160": 0,
-        "environment": 0, "spectrum": 0, "soil": 0,
+        "environment": 0, "spectrum": 0, "soil_temperature": 0,
+        "soil": 0,                           
         "battery": 0, "sound": 0, "current": 0,
         "legacy": 0, "skipped": 0
     }
@@ -449,6 +491,7 @@ def main(events) -> None:
                 if   msg_type == "bme280":      _handle_bme280(cursor, msg, body);   counts["bme280"]   += 1
                 elif msg_type == "ens160":       _handle_ens160(cursor, msg, body);   counts["ens160"]   += 1
                 elif msg_type == "spectrum":     _handle_spectrum(cursor, msg, body); counts["spectrum"] += 1
+                elif msg_type == "soil_temperature":   _handle_soil_temperature(cursor, msg, body); counts["soil_temperature"] += 1
                 elif msg_type == "soil":         _handle_soil(cursor, msg, body);     counts["soil"]     += 1
                 elif msg_type == "battery":      _handle_battery(cursor, msg, body);  counts["battery"]  += 1
                 elif msg_type in ("sound", "sound_spectrum"):
@@ -473,8 +516,9 @@ def main(events) -> None:
             pass
 
     logger.warning(
-        "Batch complete — bme=%d ens=%d env=%d spec=%d soil=%d bat=%d snd=%d cur=%d legacy=%d skipped=%d",
+        "Batch complete — bme=%d ens=%d env=%d spec=%d soil=%d soilT=%d bat=%d snd=%d cur=%d legacy=%d skipped=%d",
         counts["bme280"], counts["ens160"], counts["environment"],
-        counts["spectrum"], counts["soil"], counts["battery"],
-        counts["sound"], counts["current"], counts["legacy"], counts["skipped"]
+        counts["spectrum"], counts["soil"], counts["soil_temperature"],
+        counts["battery"], counts["sound"], counts["current"],
+        counts["legacy"], counts["skipped"]
     )

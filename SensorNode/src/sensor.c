@@ -10,6 +10,7 @@
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/fuel_gauge.h>
 #include "as7343.h"
+#include "ds18b20_direct.h"
 #include "sensor.h"
 #include "time_sync.h"
 
@@ -25,20 +26,21 @@ LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
  * where V = raw ADC count (0–4095)
  * Coefficients from moisture_calibration.xlsx → Coefficients sheet
  * ───────────────────────────────────────────────────────────────────────── */
-#define CONFIG_MOISTURE_COEFF_A3  -0.0000001329f
-#define CONFIG_MOISTURE_COEFF_A2  0.00066405f
-#define CONFIG_MOISTURE_COEFF_A1  -1.12157489f
-#define CONFIG_MOISTURE_COEFF_A0  710.879841f
+#define CONFIG_MOISTURE_DRY_ADC       2371       /* clamp floor — above = 0% */
+#define CONFIG_MOISTURE_COEFF_A3  -0.0000001095f
+#define CONFIG_MOISTURE_COEFF_A2  0.00051806f
+#define CONFIG_MOISTURE_COEFF_A1  -0.83401290f
+#define CONFIG_MOISTURE_COEFF_A0  532.626437f
 
 /* ── Moisture Sensor Two Point Calibration -- */
 #define CONFIG_MOISTURE_DRY_COUNTS  2371
 #define CONFIG_MOISTURE_WET_COUNTS  1053
 
-
 #define SAMPLE_PERIOD_ENV_MS            500U
 #define SAMPLE_PERIOD_SPECTRUM_MS       250U
 #define SAMPLE_PERIOD_MOISTURE_MS       5000U
 #define SAMPLE_PERIOD_BATTERY_MS        60000U
+#define SAMPLE_PERIOD_SOIL_MS       5000U
 
 static const struct adc_dt_spec moisture_adc =
     ADC_DT_SPEC_GET_BY_IDX(DT_PATH(zephyr_user), 0);
@@ -49,6 +51,7 @@ K_MSGQ_DEFINE(ens_q,      sizeof(struct ens160_msg),    Q_DEPTH, 4);
 K_MSGQ_DEFINE(as7_q,      sizeof(struct as7343_msg),    Q_DEPTH, 4);
 K_MSGQ_DEFINE(batt_q,     sizeof(struct batt_msg),      Q_DEPTH, 4);
 K_MSGQ_DEFINE(moisture_q, sizeof(struct moisture_msg),  Q_DEPTH, 4);
+K_MSGQ_DEFINE(ds18b20_q, sizeof(struct ds18b20_msg), Q_DEPTH, 4);
 
 /* Final telemetry queue: full samples -> BLE */
 K_MSGQ_DEFINE(full_q, sizeof(struct sensor_blk), Q_DEPTH, 4);
@@ -251,216 +254,126 @@ void env_thread(void) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* --- AS7343 thread -------------------------------------------------------- */
-
-/* wl_order: 12 spectral wavelengths in ascending order + 999 (VIS clear)    */
-/* Index in this array == index into msg.ch[] and ch12[]                     */
-/* ch[0..11] = spectral irradiance in µW/m² (mW/m² × 1000, clamped uint16)  */
-/* ch[12]    = VIS broadband irradiance in µW/m² from dedicated clear PD     */
-
+/* AS7343 thread                                                               */
+/* -------------------------------------------------------------------------- */
+ 
 static const int wl_order[13] = {
     405, 425, 450, 475, 515, 550, 555, 600, 640, 690, 745, 855, 999
 };
-
-static int wl_index(int nm)
-{
+ 
+static int wl_index(int nm) {
+    
     for (int i = 0; i < 13; ++i) {
-        if (wl_order[i] == nm) {
-            return i;
-        }
+        if (wl_order[i] == nm) return i;
     }
     return -1;
 }
-
-void as7343_thread(void)
-{
+ 
+void as7343_thread(void) {
     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
-
+ 
     if (!device_is_ready(dev)) {
         LOG_ERR("AS7343 device not ready");
         return;
     }
-
+ 
     LOG_INF("AS7343 device ready");
-
+ 
+    /* Dark offset calibration — sensor must be covered at this point.        */
+    /* Averages 10 samples in darkness to establish per-channel BasicCounts   */
+    /* offset. Call before any light measurement. Safe to skip in testing     */
+    /* (dark_calibrated remains false, Step 2 is bypassed automatically).     */
+    if (as7343_calibrate_dark(dev) < 0) {
+        LOG_WRN("AS7343: dark calibration failed — proceeding without offset");
+    }
+ 
     while (1) {
-
+ 
         if (sensor_sample_fetch(dev) < 0) {
             LOG_ERR("AS7343: fetch failed");
             k_msleep(SAMPLE_PERIOD_MS);
             continue;
         }
-
+ 
         uint32_t ch12[13] = {0};
         struct sensor_value val;
-
-        /* Read all 18 DATA channels from the driver.                         */
-        /* val.val1 = wavelength nm  (0=flicker, 999=VIS clear, else spectral)*/
-        /* val.val2 = irradiance in µW/m²  (= mW/m² * 1000, int32)           */
-        /* wl_index() maps wavelength → ch12[] slot (0..11 spectral, 12=VIS) */
-        /* Flicker channels (nm=0) return idx=-1 and are skipped.             */
-        /* No clamping needed: uint32 holds up to 4295 W/m², above any real   */
-        /* light source. val.val2 is always >= 0 (uint16 counts / positive s) */
+ 
+        /* val.val1 = wavelength nm  (0=flicker, 999=VIS clear, else spectral) */
+        /* val.val2 = irradiance in µW/m²  (mW/m² * 1000, int32)              */
+        /* wl_index() maps wavelength → ch12[] slot (0..11 spectral, 12=VIS)  */
         for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
             if (sensor_channel_get(dev, SENSOR_CHAN_PRIV_START + i, &val) == 0) {
                 int nm  = val.val1;
                 int idx = wl_index(nm);
                 if (idx >= 0 && idx < 12) {
                     ch12[idx] = (uint32_t)val.val2;
-                    LOG_DBG("AS7343: channel nm=%d (chan=%d)", nm, i);
                 } else {
                     LOG_DBG("AS7343: skip nm=%d (chan=%d)", nm, i);
                 }
             }
         }
-
-        /* ch12[12] = VIS broadband irradiance from dedicated clear PD.       */
-        /* Sourced from data->vis_irradiance_mW (averaged DATA4/10/16),       */
-        /* which uses the Fig.9 R_typ=999 responsivity — not a sum of         */
-        /* spectral channels.                                                 */
-        
+ 
+        /* ch12[12] = VIS broadband from dedicated clear PD (DATA4/10/16 avg) */
+        /* Uses Fig.9 R_typ=999 responsivity, not a sum of spectral channels.  */
         const struct as7343_data *drv =
             (const struct as7343_data *)dev->data;
         ch12[12] = (uint32_t)(drv->vis_irradiance_mW * 1000.0f);
-        
-
-        /* Pack into message ------------------------------------------------ */
+ 
+        /* Pack into message ------------------------------------------------- */
         struct as7343_msg msg = {0};
-
         for (int i = 0; i < 13; ++i) {
             msg.ch[i] = ch12[i];
         }
-
-        /* Stamp UTC at measurement moment */
         msg.utc_sec   = time_sync_get_utc_ms(&msg.utc_ms);
         msg.uptime_ms = (uint64_t)k_uptime_get();
-
-        printk("RAW: %u %u %u %u %u %u %u %u %u %u %u %u\n",
-            drv->channel_data[12],  /* F1  405nm */
-            drv->channel_data[6],   /* F2  425nm */
-            drv->channel_data[0],   /* FZ  450nm */
-            drv->channel_data[7],   /* F3  475nm */
-            drv->channel_data[8],   /* F4  515nm */
-            drv->channel_data[15],  /* F5  550nm */
-            drv->channel_data[1],   /* FY  555nm */
-            drv->channel_data[2],   /* FXL 600nm */
-            drv->channel_data[9],   /* F6  640nm */
-            drv->channel_data[13],  /* F7  690nm */
-            drv->channel_data[14],  /* F8  745nm */
-            drv->channel_data[3]);  /* NIR 855nm */
-
-        /* ch[2]=450nm(FZ), ch[7]=600nm(FXL), ch[12]=VIS broadband           */
-        printk("AS7 put: "
-               "405nm=%.2f 425nm=%.2f 450nm=%.2f 475nm=%.2f "
-               "515nm=%.2f 550nm=%.2f 555nm=%.2f 600nm=%.2f "
-               "640nm=%.2f 690nm=%.2f 745nm=%.2f 855nm=%.2f "
-               "SUM=%.2f VIS=%.2f mW/m2 UTC=%u.%03u\n",
-               msg.ch[0]  / 1000.0f,   /* 405nm F1  */
-               msg.ch[1]  / 1000.0f,   /* 425nm F2  */
-               msg.ch[2]  / 1000.0f,   /* 450nm FZ  */
-               msg.ch[3]  / 1000.0f,   /* 475nm F3  */
-               msg.ch[4]  / 1000.0f,   /* 515nm F4  */
-               msg.ch[5]  / 1000.0f,   /* 550nm F5  */
-               msg.ch[6]  / 1000.0f,   /* 555nm FY  */
-               msg.ch[7]  / 1000.0f,   /* 600nm FXL */
-               msg.ch[8]  / 1000.0f,   /* 640nm F6  */
-               msg.ch[9]  / 1000.0f,   /* 690nm F7  */
-               msg.ch[10] / 1000.0f,   /* 745nm F8  */
-               msg.ch[11] / 1000.0f,   /* 855nm NIR */
-               (msg.ch[0] + msg.ch[1] + msg.ch[2]  + msg.ch[3] +
-                msg.ch[4] + msg.ch[5] + msg.ch[6]  + msg.ch[7] +
-                msg.ch[8] + msg.ch[9] + msg.ch[10] + msg.ch[11]) / 1000.0f,
-               msg.ch[12] / 1000.0f,   /* VIS broadband clear PD */
-               msg.utc_sec, msg.utc_ms);
-
+ 
+        // /* Diagnostic prints ------------------------------------------------- */
+        // printk("RAW: %u %u %u %u %u %u %u %u %u %u %u %u\n",
+        //     drv->channel_data[12],  /* F1  405nm */
+        //     drv->channel_data[6],   /* F2  425nm */
+        //     drv->channel_data[0],   /* FZ  450nm */
+        //     drv->channel_data[7],   /* F3  475nm */
+        //     drv->channel_data[8],   /* F4  515nm */
+        //     drv->channel_data[15],  /* F5  550nm */
+        //     drv->channel_data[1],   /* FY  555nm */
+        //     drv->channel_data[2],   /* FXL 600nm */
+        //     drv->channel_data[9],   /* F6  640nm */
+        //     drv->channel_data[13],  /* F7  690nm */
+        //     drv->channel_data[14],  /* F8  745nm */
+        //     drv->channel_data[3]);  /* NIR 855nm */
+ 
+        // printk("AS7 put: "
+        //        "405nm=%.2f 425nm=%.2f 450nm=%.2f 475nm=%.2f "
+        //        "515nm=%.2f 550nm=%.2f 555nm=%.2f 600nm=%.2f "
+        //        "640nm=%.2f 690nm=%.2f 745nm=%.2f 855nm=%.2f "
+        //        "SUM=%.2f VIS=%.2f mW/m2 UTC=%u.%03u\n",
+        //        msg.ch[0]  / 1000.0f,
+        //        msg.ch[1]  / 1000.0f,
+        //        msg.ch[2]  / 1000.0f,
+        //        msg.ch[3]  / 1000.0f,
+        //        msg.ch[4]  / 1000.0f,
+        //        msg.ch[5]  / 1000.0f,
+        //        msg.ch[6]  / 1000.0f,
+        //        msg.ch[7]  / 1000.0f,
+        //        msg.ch[8]  / 1000.0f,
+        //        msg.ch[9]  / 1000.0f,
+        //        msg.ch[10] / 1000.0f,
+        //        msg.ch[11] / 1000.0f,
+        //        (msg.ch[0] + msg.ch[1] + msg.ch[2]  + msg.ch[3] +
+        //         msg.ch[4] + msg.ch[5] + msg.ch[6]  + msg.ch[7] +
+        //         msg.ch[8] + msg.ch[9] + msg.ch[10] + msg.ch[11]) / 1000.0f,
+        //        msg.ch[12] / 1000.0f,
+        //        msg.utc_sec, msg.utc_ms);
+ 
         if (k_msgq_put(&as7_q, &msg, K_NO_WAIT) != 0) {
             struct as7343_msg dump;
             (void)k_msgq_get(&as7_q, &dump, K_NO_WAIT);
             (void)k_msgq_put(&as7_q, &msg, K_NO_WAIT);
         }
-
+ 
         k_msleep(SAMPLE_PERIOD_MS);
     }
 }
-
-// /* -------------------------------------------------------------------------- */
-// /* --- AS7343 thread -------------------------------------------------------- */
-
-// static const int wl_order[13] = {
-//     405,425,450,475,515,550,555,600,640,690,745,855,999
-// };
-
-// static int wl_index(int nm) {
-
-//     for (int i = 0; i < 13; ++i) {
-//         if (wl_order[i] == nm) {
-//             return i;
-//         }
-//     }
-//     return -1;
-// }
-
-// void as7343_thread(void) {
-//     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
-
-//     if (!device_is_ready(dev)) {
-//         LOG_ERR("AS7343 device not ready");
-//         return;
-//     }
-
-//     LOG_INF("AS7343 device ready");
-
-//     while (1) {
-
-//         if (sensor_sample_fetch(dev) < 0) {
-//             LOG_ERR("AS7343: fetch failed");
-//             k_msleep(SAMPLE_PERIOD_MS);
-//             continue;
-//         }
-
-//         uint16_t ch12[13] = {0};
-//         struct sensor_value val;
-
-//         for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
-//             if (sensor_channel_get(dev, SENSOR_CHAN_PRIV_START + i, &val) == 0) {
-//                 int nm  = val.val1;
-//                 int idx = wl_index(nm);
-//                 if (idx >= 0) {
-//                     int c = val.val2;
-//                     if (c < 0)c = 0;
-//                     if (c > 0xFFFF) c = 0xFFFF;
-//                     ch12[idx] = (uint16_t)c;
-//                 } else {
-//                     LOG_DBG("AS7343: skip unknown nm=%d (chan=%d)", nm, i);
-//                 }
-//             }
-//         }
-
-//         struct as7343_msg msg = {0};
-//         uint32_t vis = 0;
-//         for (int i = 0; i < 12; ++i) {
-//             msg.ch[i] = ch12[i];
-//             vis += ch12[i];
-//         }
-//         if (vis > 0xFFFF) vis = 0xFFFF;
-//         msg.ch[12] = (uint16_t)vis;
-
-//         /* Stamp UTC at measurement moment */
-//         msg.utc_sec = time_sync_get_utc_ms(&msg.utc_ms);
-//         msg.uptime_ms = (uint64_t)k_uptime_get();
-
-//         printk("AS7 put: 450nm=%u 600nm=%u VIS=%u UTC=%u.%03u\n",
-//                msg.ch[2], msg.ch[7], msg.ch[12], msg.utc_sec, msg.utc_ms);
-
-//         if (k_msgq_put(&as7_q, &msg, K_NO_WAIT) != 0) {
-//             struct as7343_msg dump;
-//             (void)k_msgq_get(&as7_q, &dump, K_NO_WAIT);
-//             (void)k_msgq_put(&as7_q, &msg, K_NO_WAIT);
-//         }
-
-//         k_msleep(SAMPLE_PERIOD_MS);
-//     }
-// }
 
 /* -------------------------------------------------------------------------- */
 /* --- Capacitive Soil Moisture Sensor thread ------------------------------- */
@@ -470,6 +383,10 @@ void as7343_thread(void)
  * Output: gravimetric moisture x100 fixed-point (e.g. 4250 = 42.50%)
  * Clamped to [0, 10000] (0–100%)                                      */
 static uint16_t compute_moisture_x100_poly(uint16_t raw) {
+
+    if (raw >= CONFIG_MOISTURE_DRY_ADC) {
+        return 0;
+    }
     float v   = (float)raw;
     float pct = (CONFIG_MOISTURE_COEFF_A3 * v * v * v)
               + (CONFIG_MOISTURE_COEFF_A2 * v * v)
@@ -551,6 +468,45 @@ void moisture_thread(void) {
         }
 
         k_msleep(SAMPLE_PERIOD_MOISTURE_MS);
+    }
+}
+
+/* --- DS18B20 thread --- */
+void ds18b20_thread(void)
+{
+    int ret = ds18b20_direct_init();
+    if (ret != 0) {
+        LOG_ERR("DS18B20 direct init failed: %d", ret);
+        return;
+    }
+    LOG_INF("DS18B20 direct driver ready");
+
+    while (1) {
+        struct sensor_value temp;
+
+        ret = ds18b20_direct_read_sensor_value(&temp);
+        if (ret != 0) {
+            LOG_ERR("DS18B20: read failed: %d", ret);
+            k_msleep(SAMPLE_PERIOD_MS);
+            continue;
+        }
+
+        struct ds18b20_msg m = {0};
+        m.temp_val1  = temp.val1;
+        m.temp_val2  = temp.val2;
+        m.utc_sec    = time_sync_get_utc_ms(&m.utc_ms);
+        m.uptime_ms  = (uint64_t)k_uptime_get();
+
+        printk("DS18B20 put: Temp=%d.%06d °C UTC=%u.%03u\n",
+               m.temp_val1, m.temp_val2, m.utc_sec, m.utc_ms);
+
+        if (k_msgq_put(&ds18b20_q, &m, K_NO_WAIT) != 0) {
+            struct ds18b20_msg dump;
+            (void)k_msgq_get(&ds18b20_q, &dump, K_NO_WAIT);
+            (void)k_msgq_put(&ds18b20_q, &m, K_NO_WAIT);
+        }
+
+        k_msleep(SAMPLE_PERIOD_SOIL_MS);   /* 30000ms — soil temp changes slowly */
     }
 }
 

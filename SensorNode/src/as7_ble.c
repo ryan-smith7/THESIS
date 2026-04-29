@@ -27,7 +27,8 @@ LOG_MODULE_REGISTER(as7_ble, LOG_LEVEL_INF);
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00, \
     0x02, 0x00, 0x00, 0xA7
 
-#define AS7_BUF_LEN (6 + AS7343_NUM_CH * 2 + 1)  /* was 4+26=30, now 6+26=32 +1 FOR DEVICE*/
+/* AS7_BUF_LEN = 6 (timestamp) + 13*4 (channels) + 1 (dev_id) = 59 bytes    */
+#define AS7_BUF_LEN  59
 
 static bool            as7_notify_enabled = false;
 static struct bt_conn *as7_conn           = NULL;
@@ -60,26 +61,48 @@ static struct bt_conn_cb as7_conn_cb = {
     .disconnected = as7_disconnected,
 };
 
-bool as7_pack_and_notify(const struct as7343_msg *msg) {
-
+/* -------------------------------------------------------------------------- */
+/* BLE pack and notify                                                         */
+/*                                                                             */
+/* Payload layout (59 bytes total):                                            */
+/*   [0-3]   utc_sec     big-endian uint32                                    */
+/*   [4-5]   utc_ms      big-endian uint16                                    */
+/*   [6-57]  ch[0..12]   big-endian uint32 each  (13 × 4 = 52 bytes)         */
+/*   [58]    dev_id                                                            */
+/*                                                                             */
+/* ch[] changed from uint16 (2 bytes) to uint32 (4 bytes) to hold µW/m²      */
+/* values up to ~1,000,000 (1000 W/m²) without truncation.                   */
+/* Update AS7_BUF_LEN and gateway deserialiser offsets to match.              */
+/*                                                                             */
+/* Gateway: read each ch[i] as big-endian uint32 at offset 6 + i*4           */
+/* Convert to mW/m²: ch[i] / 1000.0                                           */
+ bool as7_pack_and_notify(const struct as7343_msg *msg) {
     struct bt_conn *conn = as7_conn;
     if (!conn || !as7_notify_enabled) {
         return false;
     }
-
-    as7_buf[0] = (msg->utc_sec >>  24) & 0xFF;  /* utc_sec [0-3] */
-    as7_buf[1] = (msg->utc_sec >>  16) & 0xFF;
-    as7_buf[2] = (msg->utc_sec >>   8) & 0xFF;
-    as7_buf[3] =  msg->utc_sec         & 0xFF;
-    as7_buf[4] = (msg->utc_ms  >>   8) & 0xFF;  /* utc_ms  [4-5] — NEW */
-    as7_buf[5] =  msg->utc_ms          & 0xFF;
-
-    for (int i = 0; i < AS7343_NUM_CH; i++) {   /* bins    [6-31] */
-        as7_buf[6 + i * 2]     = (msg->ch[i] >> 8) & 0xFF;
-        as7_buf[6 + i * 2 + 1] =  msg->ch[i]       & 0xFF;
+ 
+    /* UTC timestamp — big-endian */
+    as7_buf[0] = (msg->utc_sec >> 24) & 0xFF;
+    as7_buf[1] = (msg->utc_sec >> 16) & 0xFF;
+    as7_buf[2] = (msg->utc_sec >>  8) & 0xFF;
+    as7_buf[3] =  msg->utc_sec        & 0xFF;
+    as7_buf[4] = (msg->utc_ms  >>  8) & 0xFF;
+    as7_buf[5] =  msg->utc_ms         & 0xFF;
+ 
+    /* Spectral + VIS channels — big-endian uint32 (4 bytes each)             */
+    /* ch[0..11] = spectral irradiance µW/m²                                  */
+    /* ch[12]    = VIS broadband irradiance µW/m²                             */
+    for (int i = 0; i < AS7343_NUM_CH; i++) {
+        as7_buf[6 + i * 4]     = (msg->ch[i] >> 24) & 0xFF;
+        as7_buf[6 + i * 4 + 1] = (msg->ch[i] >> 16) & 0xFF;
+        as7_buf[6 + i * 4 + 2] = (msg->ch[i] >>  8) & 0xFF;
+        as7_buf[6 + i * 4 + 3] =  msg->ch[i]        & 0xFF;
     }
-    as7_buf[32] =  DEVICE_ID;                      /* dev_id  [32]   */
-
+ 
+    /* Device ID */
+    as7_buf[6 + AS7343_NUM_CH * 4] = DEVICE_ID;
+ 
     MODALITY_NOTIFY(as7, conn, as7_notify_enabled, as7_buf, AS7_BUF_LEN);
     return true;
 }

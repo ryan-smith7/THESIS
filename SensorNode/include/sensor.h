@@ -93,15 +93,6 @@ struct as7343_msg {
     uint64_t uptime_ms;          /* offset 64, size 8                  */
 };                               /* total: 72 bytes                    */
 
-// struct as7343_msg {
-//     uint16_t ch[AS7343_NUM_CH];          /* offset 0,  size 36 (if NUM_CH=18) */
-//     uint16_t utc_ms;                     /* offset 36, size 2  */
-//     uint16_t _pad;                       /* offset 38, size 2  */
-//     uint32_t utc_sec;                    /* offset 40, size 4  */
-//     uint32_t _pad2;                      /* offset 44, size 4  */
-//     uint64_t uptime_ms;                  /* offset 48, size 8 ✓ */
-// };                                       /* total: 56 bytes */
-
 struct batt_msg {
     uint16_t mV;                         /* offset 0,  size 2  */
     uint8_t  pct;                        /* offset 2,  size 1  */
@@ -120,6 +111,17 @@ struct moisture_msg {
     uint32_t utc_sec;                    /* offset 4,  size 4  */
     uint64_t uptime_ms;                  /* offset 8,  size 8 ✓ */
 };                                       /* total: 16 bytes, no padding needed */
+
+/* DS18B20 soil temperature message */
+struct ds18b20_msg {
+    int32_t  temp_val1;                  /* offset 0,  size 4  — integer °C */
+    int32_t  temp_val2;                  /* offset 4,  size 4  — fractional millionths */
+    uint32_t utc_sec;                    /* offset 8,  size 4  */
+    uint16_t utc_ms;                     /* offset 12, size 2  */
+    uint16_t _pad;                       /* offset 14, size 2  */
+    uint64_t uptime_ms;                  /* offset 16, size 8  */
+};                                       /* total: 24 bytes    */
+
 
 struct current_msg {
     int16_t  current_uA;                 /* offset 0,  size 2  */
@@ -141,6 +143,8 @@ extern struct k_msgq batt_q;
 extern struct k_msgq full_q;
 extern struct k_msgq moisture_q;
 extern struct k_msgq current_q;  //CURRENT ADDITION
+extern struct k_msgq ds18b20_q;  //soil temp ADDITION
+
 
 extern void set_logging_state(uint8_t new_value);
 extern void set_logging_file(char* file_abs_path);
@@ -153,5 +157,6 @@ extern void max17048_thread(void);
 extern void moisture_thread(void);
 extern void sensor_control_thread(void);
 extern void current_thread(void); //CURRENT ADDITION
+extern void ds18b20_thread(void);
 
 #endif /* SENSOR_H */

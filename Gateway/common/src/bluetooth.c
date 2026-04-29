@@ -41,9 +41,10 @@
 #define CUR_PAYLOAD_LEN   11   /* utc_sec(4)+utc_ms(2)+current_uA(2)+voltage_mV(2) */
 #define BME_PAYLOAD_LEN  15  /* +2 for utc_ms */
 #define ENS_PAYLOAD_LEN  12  /* +2 for utc_ms */
-#define AS7_PAYLOAD_LEN  33  /* +2 for utc_ms */
+#define AS7_PAYLOAD_LEN  59  /* +2 for utc_ms */
 #define MST_PAYLOAD_LEN   9  /* +2 for utc_ms */
 #define BAT_PAYLOAD_LEN  12  /* +2 for utc_ms */
+#define DS18B20_PAYLOAD_LEN  11  /* utc_sec(4)+utc_ms(2)+val1(2)+val2(2)+dev_id(1) */
 
 #define SOUND_NUM_BINS     348 //need to add 1 for device if sending through
 #define SOUND_BINS_PER_PKT 116
@@ -100,6 +101,11 @@ static struct bt_uuid_128 cur_char_uuid = BT_UUID_INIT_128(
     0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
     0x02, 0x00, 0x00, 0xCC);
 
+static struct bt_uuid_128 ds18b20_char_uuid = BT_UUID_INIT_128(
+    0xD5, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6,
+    0x78, 0x90, 0xCD, 0xAB, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0xD5);
+
 static struct bt_uuid_16 cccd_uuid = BT_UUID_INIT_16(0x2902);
 
 /* ═══════════════════════════════════════════════════════════
@@ -114,6 +120,14 @@ static struct bt_conn *conns[MAX_CONN];
     static struct bt_gatt_discover_params  name##_disc[MAX_CONN]; \
     static struct bt_gatt_discover_params  name##_cccd_disc[MAX_CONN]
 
+static const struct bt_le_conn_param conn_params = 
+    BT_LE_CONN_PARAM_INIT(
+        BT_GAP_INIT_CONN_INT_MIN,   
+        BT_GAP_INIT_CONN_INT_MAX,   
+        0,                          
+        800                         
+    );
+
 DECL_MOD(sensor);
 DECL_MOD(sound);
 DECL_MOD(bme);
@@ -122,6 +136,7 @@ DECL_MOD(as7);
 DECL_MOD(mst);
 DECL_MOD(bat);
 DECL_MOD(cur);
+DECL_MOD(ds18b20);
 
 /* Sound reassembly */
 struct sound_reassembly {
@@ -139,7 +154,8 @@ K_MSGQ_DEFINE(ens_msgq, sizeof(mod_ens_t),  MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(as7_msgq, sizeof(mod_spec_t), MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(mst_msgq, sizeof(mod_mst_t),  MSGQ_MAX_MSGS, 4);
 K_MSGQ_DEFINE(bat_msgq, sizeof(mod_bat_t),  MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(cur_msgq,   sizeof(mod_cur_t),                MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(cur_msgq,   sizeof(mod_cur_t), MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(ds18b20_msgq, sizeof(mod_ds18b20_t), MSGQ_MAX_MSGS, 4);
 
 struct sound_queue_pkt_t { mod_snd_t sp; };
 K_MSGQ_DEFINE(sound_msgq, sizeof(struct sound_queue_pkt_t), 2, 4);
@@ -158,11 +174,32 @@ static void discover_as7_char(struct bt_conn *conn, int index);
 static void discover_mst_char(struct bt_conn *conn, int index);
 static void discover_bat_char(struct bt_conn *conn, int index);
 static void discover_cur_char(struct bt_conn *conn, int index);
+static void discover_ds18b20_char(struct bt_conn *conn, int index);
 static void discover_done(struct bt_conn *conn, int index);
 
 /* ═══════════════════════════════════════════════════════════
  * Helpers
  * ═══════════════════════════════════════════════════════════ */
+
+ /* ── Delayed discovery work — stagger dual-connection chains ─────────── */
+static struct k_work_delayable disc_work[MAX_CONN];
+
+static void disc_work_handler(struct k_work *work)
+{
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    int index = (int)(dwork - disc_work);
+    if (conns[index]) {
+        discover_sensor_char(conns[index], index);
+    }
+}
+
+/* ── Scan restart work — never sleep in BLE callbacks ───────────────── */
+static struct k_work scan_start_work;
+
+static void scan_start_work_handler(struct k_work *work)
+{
+    start_scan();
+}
 
 static int get_conn_index(struct bt_conn *conn) {
     for (int i = 0; i < MAX_CONN; i++) {
@@ -283,27 +320,30 @@ static uint8_t ens_notify_func(struct bt_conn *conn,
 /* ── AS7343 (30 bytes: uptime(4) + 13×uint16(26)) ────────────────────── */
 static uint8_t as7_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length) {
-
+                                const void *data, uint16_t length)
+{
     if (!data || length != AS7_PAYLOAD_LEN) {
         return BT_GATT_ITER_CONTINUE;
     }
-
+ 
     int idx = get_conn_index(conn);
-
     if (idx < 0) {
         return BT_GATT_ITER_CONTINUE;
     }
-
+ 
     const uint8_t *d = data;
     mod_spec_t msg;
+ 
     msg.utc_sec = be32(d + 0);
-    msg.utc_ms  = be16(d + 4);   /* NEW */
+    msg.utc_ms  = be16(d + 4);
+ 
+    /* ch[] — big-endian uint32, 4 bytes each, starting at offset 6 */
     for (int i = 0; i < AS7343_NUM_CH; i++) {
-        msg.ch[i] = be16(d + 6 + i * 2);
+        msg.ch[i] = be32(d + 6 + i * 4);
     }
-    msg.dev_id   = d[32];          /* dev_id from sensor node — identifies which node */
-
+ 
+    msg.dev_id = d[6 + AS7343_NUM_CH * 4];  /* offset 58 */
+ 
     if (k_msgq_put(&as7_msgq, &msg, K_NO_WAIT) != 0) {
         LOG_WRN("[AS7 %d] queue full", idx);
     }
@@ -331,6 +371,31 @@ static uint8_t mst_notify_func(struct bt_conn *conn,
 
     if (k_msgq_put(&mst_msgq, &msg, K_NO_WAIT) != 0) {
         LOG_WRN("[MST %d] queue full", idx);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+static uint8_t ds18b20_notify_func(struct bt_conn *conn,
+                                    struct bt_gatt_subscribe_params *params,
+                                    const void *data, uint16_t length) {
+    if (!data || length != DS18B20_PAYLOAD_LEN) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+    int idx = get_conn_index(conn);
+    if (idx < 0) {
+        return BT_GATT_ITER_CONTINUE;
+    }
+ 
+    const uint8_t *d = data;
+    mod_ds18b20_t msg;
+    msg.utc_sec   = be32(d + 0);
+    msg.utc_ms    = be16(d + 4);
+    msg.temp_val1 = be16s(d + 6);   /* integer °C */
+    msg.temp_val2 = be16s(d + 8);   /* centidegrees fractional */
+    msg.dev_id    = d[10];
+ 
+    if (k_msgq_put(&ds18b20_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("[DS18B20 %d] queue full", idx);
     }
     return BT_GATT_ITER_CONTINUE;
 }
@@ -577,7 +642,8 @@ MODALITY_DISC_FUNCS(ens,   discover_as7_char,  ens_notify_func)
 MODALITY_DISC_FUNCS(as7,   discover_mst_char,  as7_notify_func)
 MODALITY_DISC_FUNCS(mst,   discover_bat_char,  mst_notify_func)
 MODALITY_DISC_FUNCS(bat,   discover_cur_char,  bat_notify_func)
-MODALITY_DISC_FUNCS(cur,   discover_done,      cur_notify_func)
+MODALITY_DISC_FUNCS(cur,     discover_ds18b20_char, cur_notify_func)
+MODALITY_DISC_FUNCS(ds18b20, discover_done,         ds18b20_notify_func)
 
 /* ═══════════════════════════════════════════════════════════
  * Scan and connection management
@@ -631,8 +697,10 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     LOG_INF("[BASE] Found tracker: %s (RSSI %d)", addr_str, rssi);
 
     bt_le_scan_stop();
+    // int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
+    //                             BT_LE_CONN_PARAM_DEFAULT, &conns[slot]);
     int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
-                                BT_LE_CONN_PARAM_DEFAULT, &conns[slot]);
+                            &conn_params, &conns[slot]);
     if (err) {
         LOG_ERR("[BASE] Connect failed (%d)", err);
         start_scan();
@@ -657,22 +725,21 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     if (err) {
         LOG_ERR("[BASE] Connect failed (err %u)", err);
         bt_conn_unref(conn);
-        start_scan();
+        k_work_submit(&scan_start_work);   /* ← not start_scan() */
         return;
     }
 
-    /* Don't establish BLE connections if MQTT is not up */
     if (!azure_mqtt_is_connected()) {
         LOG_WRN("[BASE] MQTT not connected — rejecting BLE connection");
         bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-        start_scan();
+        k_work_submit(&scan_start_work);   /* ← not start_scan() */
         return;
     }
 
     int index = get_conn_index(conn);
     if (index < 0) {
         bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-        start_scan();
+        k_work_submit(&scan_start_work);   /* ← not start_scan() */
         return;
     }
 
@@ -683,8 +750,17 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     mtu_params[index].func = exchange_func;
     bt_gatt_exchange_mtu(conn, &mtu_params[index]);
 
-    discover_sensor_char(conn, index);
-    start_scan();
+    // discover_sensor_char(conn, index);
+    // // k_sleep(K_MSEC(500));
+    // start_scan();
+    int active = 0;
+    for (int i = 0; i < MAX_CONN; i++) {
+        if (conns[i] && i != index) active++;
+    }
+    /* First node starts immediately, second waits 3s */
+    k_work_schedule(&disc_work[index], K_MSEC(active > 0 ? 3000 : 0));
+    k_work_submit(&scan_start_work);
+
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
@@ -702,9 +778,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
         mst_char_handles[index]    = 0;
         bat_char_handles[index]    = 0;
         cur_char_handles[index]    = 0;
+        ds18b20_char_handles[index] = 0;
         memset(&sound_rx[index], 0, sizeof(sound_rx[index]));
     }
-    start_scan();
+    // k_sleep(K_MSEC(500));  /* brief settle before restarting scan */
+    // start_scan();
+    k_work_submit(&scan_start_work);
 }
 
 static struct bt_conn_cb conn_callbacks = {
@@ -733,6 +812,7 @@ static char s_as7_json[JSON_SPEC_BUF_SIZE] __attribute__((section(".ext_ram.bss"
 static char s_mst_json[JSON_MST_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_bat_json[JSON_BAT_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
 static char s_snd_json[JSON_SND_BUF_SIZE]  __attribute__((section(".ext_ram.bss")));
+static char s_ds18b20_json[JSON_DS18B20_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 #else
 static char s_bme_json[JSON_BME_BUF_SIZE];
 static char s_ens_json[JSON_ENS_BUF_SIZE];
@@ -741,6 +821,7 @@ static char s_mst_json[JSON_MST_BUF_SIZE];
 static char s_bat_json[JSON_BAT_BUF_SIZE];
 static char s_snd_json[JSON_SND_BUF_SIZE];
 static char s_cur_json[JSON_CUR_BUF_SIZE];
+static char s_ds18b20_json[JSON_DS18B20_BUF_SIZE];
 #endif
 
 static uint8_t sound_throttle = 0;
@@ -863,10 +944,27 @@ void process_data_thread(void) {
                 LOG_ERR("cur JSON encode failed (%d)", ret);
             }
         }
+
+        mod_ds18b20_t ds18b20_msg;
+        if (k_msgq_get(&ds18b20_msgq, &ds18b20_msg, K_MSEC(5)) == 0) {
+            int ret = json_encode_ds18b20(&ds18b20_msg, s_ds18b20_json, sizeof(s_ds18b20_json));
+            if (ret > 0) {
+                LOG_INF("ds18b20 JSON: %s", s_ds18b20_json);
+                azure_mqtt_publish(s_ds18b20_json);
+            } else {
+                LOG_ERR("ds18b20 JSON encode failed (%d)", ret);
+            }
+        }
     }
 }
 
 void base_thread(void) {
+    /* Initialise work items before any connection can occur */
+    for (int i = 0; i < MAX_CONN; i++) {
+        k_work_init_delayable(&disc_work[i], disc_work_handler);
+    }
+    k_work_init(&scan_start_work, scan_start_work_handler);
+
     int err = bt_enable(NULL);
     if (err) {
         LOG_ERR("[BASE] Bluetooth init failed (err %d)", err);

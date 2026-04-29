@@ -58,6 +58,7 @@
 #define SD_LOG_AS7343    "/SD/as7343.bin"
 #define SD_LOG_MOISTURE  "/SD/moisture.bin"
 #define SD_LOG_SOUND     "/SD/sound.bin"
+#define SD_LOG_DS18B20   "/SD/DS18B20.BIN"   /* UTC upload file */
 
 /* ── Boot counter file ───────────────────────────────────────────────────── */
 #define SD_LOG_BOOTCOUNT "/SD/boot.txt"
@@ -121,6 +122,7 @@ const char *sd_log_boot_path_snd(void);
 // #elif defined(CONFIG_SENSOR_NODE_2)
 const char *sd_log_boot_path_as7(void);
 const char *sd_log_boot_path_mst(void);
+const char *sd_log_boot_path_ds18b20(void);
 // #endif
 
 #endif /* SD_LOG_H */

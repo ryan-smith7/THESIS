@@ -51,6 +51,7 @@
 #include "ens_ble.h"
 #include "as7_ble.h"
 #include "mst_ble.h"
+#include "ds18b20_ble.h"
 
 // #if defined(CONFIG_SENSOR_NODE_1)
 #include "sound.h"
@@ -87,6 +88,7 @@ static char boot_snd[BOOT_PATH_MAX];
 // #elif defined(CONFIG_SENSOR_NODE_2)
 static char boot_as7[BOOT_PATH_MAX];
 static char boot_mst[BOOT_PATH_MAX];
+static char boot_ds18b20[BOOT_PATH_MAX];
 // #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -237,9 +239,11 @@ int sd_log_init(void) {
 // #elif defined(CONFIG_SENSOR_NODE_2)
     snprintf(boot_as7, sizeof(boot_as7), "/SD/AS7%04u.BIN", (unsigned)boot);
     snprintf(boot_mst, sizeof(boot_mst), "/SD/MST%04u.BIN", (unsigned)boot);
+    snprintf(boot_ds18b20, sizeof(boot_ds18b20), "/SD/D18%04u.BIN", (unsigned)boot);
 
     heal_utc_file_tail(SD_LOG_AS7343,  sizeof(struct as7343_msg));
     heal_utc_file_tail(SD_LOG_MOISTURE, sizeof(struct moisture_msg));
+    heal_utc_file_tail(SD_LOG_DS18B20, sizeof(struct ds18b20_msg));
 // #endif
 
     LOG_INF("SD log: ready");
@@ -261,6 +265,7 @@ const char *sd_log_boot_path_snd(void) { return boot_snd; }
 // #elif defined(CONFIG_SENSOR_NODE_2)
 const char *sd_log_boot_path_as7(void) { return boot_as7; }
 const char *sd_log_boot_path_mst(void) { return boot_mst; }
+const char *sd_log_boot_path_ds18b20(void) { return boot_ds18b20; }
 // #endif
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -693,6 +698,81 @@ static void drain_mst(void)
     LOG_INF("SD drain MST: %d OK, %d corrupt", count, corrupt);
 }
 
+/* ── 5. Add drain_ds18b20() in the NODE_2 block alongside drain_as7/mst ─── */
+ 
+static void drain_ds18b20(void)
+{
+    k_sem_take(&ds18b20_notify_sem, K_SECONDS(30));
+    const size_t stride = sizeof(struct ds18b20_msg) + 4;
+    char fatpath[MAX_PATH_LEN];
+    int  count = 0, corrupt = 0;
+    struct ds18b20_msg row;
+ 
+    to_fatfs_path(SD_LOG_DS18B20, fatpath, sizeof(fatpath));
+ 
+    k_mutex_lock(&sd_mutex, K_FOREVER);
+    FILINFO fno;
+    if (f_stat(fatpath, &fno) != FR_OK || fno.fsize == 0) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    if (fno.fsize % stride != 0) {
+        LOG_WRN("SD drain DS18B20: file size not multiple of stride — skipping");
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    FIL fil;
+    if (f_open(&fil, fatpath, FA_READ | FA_WRITE) != FR_OK) {
+        k_mutex_unlock(&sd_mutex);
+        return;
+    }
+    k_mutex_unlock(&sd_mutex);
+ 
+    while (1) {
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        FSIZE_t fsize = f_size(&fil);
+        if (fsize < stride) {
+            f_close(&fil);
+            f_unlink(fatpath);
+            k_mutex_unlock(&sd_mutex);
+            break;
+        }
+        FSIZE_t rec_pos = fsize - stride;
+        f_lseek(&fil, rec_pos);
+        UINT br;
+        int rc = read_raw_verify_crc(&fil, (uint8_t *)&row,
+                                     sizeof(struct ds18b20_msg), &br);
+        if (rc != 0) {
+            LOG_WRN("SD drain DS18B20: corrupt tail — truncating");
+            f_lseek(&fil, rec_pos);
+            f_truncate(&fil);
+            f_sync(&fil);
+            corrupt++;
+            k_mutex_unlock(&sd_mutex);
+            continue;
+        }
+        k_mutex_unlock(&sd_mutex);
+ 
+        if (!ds18b20_pack_and_notify(&row)) {
+            LOG_WRN("SD drain DS18B20: disconnected at record %d — %d remain in file",
+                    count, (int)(rec_pos / stride));
+            k_mutex_lock(&sd_mutex, K_FOREVER);
+            f_close(&fil);
+            k_mutex_unlock(&sd_mutex);
+            return;
+        }
+        count++;
+ 
+        k_mutex_lock(&sd_mutex, K_FOREVER);
+        f_lseek(&fil, rec_pos);
+        f_truncate(&fil);
+        f_sync(&fil);
+        k_mutex_unlock(&sd_mutex);
+    }
+ 
+    LOG_INF("SD drain DS18B20: %d OK, %d corrupt", count, corrupt);
+}
+
 #endif /* CONFIG_SENSOR_NODE_1 / 2 */
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -727,6 +807,7 @@ void sd_drain_thread(void) {
         #elif defined(CONFIG_SENSOR_NODE_2)
         drain_as7();   /* throttled at 100ms/record internally */
         drain_mst();
+        drain_ds18b20();   /* ← add this line */
         #else
         // #error "No sensor node selected."
         #endif

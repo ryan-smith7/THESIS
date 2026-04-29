@@ -15,11 +15,11 @@
  *
  *   ESP32-POE  (CONFIG_ETH_GATEWAY=y):
  *     Tighter DRAM budget — BT + Ethernet share 96 KB dram1.
- *     MAX_CONN 2: POE board drives fewer sensor nodes.
+ *     MAX_CONN 3: POE board drives fewer sensor nodes.
  *
  *   ESP32-WROVER (CONFIG_ETH_GATEWAY not set):
  *     SPIRAM available — larger stacks, more simultaneous nodes.
- *     MAX_CONN 4: WROVER gateway handles up to 4 BLE peripherals.
+ *     MAX_CONN 3: WROVER gateway handles up to 3 BLE peripherals.
  */
 #if defined(CONFIG_ETH_GATEWAY)
 #  define BASE_CONTROL_STACK_SIZE  1536
