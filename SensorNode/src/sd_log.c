@@ -279,19 +279,16 @@ const char *sd_log_boot_path_ds18b20(void) { return boot_ds18b20; }
  * pointer type, preserving type safety without per-modality functions.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-void sd_log_write_boot(const char *path, const void *msg, size_t len)
-{
-    if (!sd_ready) { return; }
+void sd_log_write(const char *path, const void *msg, size_t len) {
+    if (!sd_ready) {
+        return;
+    }
     k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)msg, len);
-    k_mutex_unlock(&sd_mutex);
-}
-
-void sd_log_write_utc(const char *path, const void *msg, size_t len)
-{
-    if (!sd_ready) { return; }
-    k_mutex_lock(&sd_mutex, K_FOREVER);
-    write_raw_to_file(path, (const uint8_t *)msg, len);
+    int rc = write_raw_to_file(path, (const uint8_t *)msg, len);
+    if (rc == -ENOSPC) {
+        LOG_ERR("SD full — writes disabled until reboot");
+        sd_ready = false;
+    }
     k_mutex_unlock(&sd_mutex);
 }
 

@@ -513,6 +513,60 @@ void ds18b20_thread(void)
 #if defined(CONFIG_FUEL_GAUGE)
 /* -------------------------------------------------------------------------- */
 /* --- MAX17048 Fuel Gauge thread (commented — enable when hardware ready) -- */
+// void max17048_thread(void) {
+
+//     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
+
+//     if (!device_is_ready(dev)) {
+//         LOG_ERR("MAX17048 fuel gauge not ready");
+//         return;
+//     }
+//     LOG_INF("MAX17048 fuel gauge ready");
+
+//     while (1) {
+//         union fuel_gauge_prop_val voltage, soc, tte, ttf;
+
+//         int rv  = fuel_gauge_get_prop(dev, FUEL_GAUGE_VOLTAGE,                  &voltage);
+//         int rs  = fuel_gauge_get_prop(dev, FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE, &soc);
+//         int rte = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_EMPTY,         &tte);
+//         int rtf = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_FULL,          &ttf);
+
+//         if (rv != 0 || rs != 0) {
+//             LOG_ERR("MAX17048: read failed (rv=%d rs=%d)", rv, rs);
+//             k_msleep(SAMPLE_PERIOD_MS);
+//             continue;
+//         }
+
+//         int16_t rate_x10 = 0;
+//         if (rtf == 0 && ttf.runtime_to_full > 0)        rate_x10 = +10;
+//         else if (rte == 0 && tte.runtime_to_empty > 0)  rate_x10 = -10;
+
+//         uint16_t bat_utc_ms;
+//         uint32_t bat_utc_sec = time_sync_get_utc_ms(&bat_utc_ms);
+
+//         struct batt_msg m = {
+//             .mV       = (uint16_t)(voltage.voltage / 1000),
+//             .pct      = (uint8_t)CLAMP(soc.relative_state_of_charge, 0, 100),
+//             .rate_x10 = rate_x10,
+//             .utc_sec  = bat_utc_sec,
+//             .utc_ms   = bat_utc_ms,
+//         };
+
+//         printk("BATT: %u mV  %u%%  %s  UTC=%u.%03u\n",
+//                m.mV, m.pct,
+//                rate_x10 > 0 ? "charging" : (rate_x10 < 0 ? "discharging" : "unknown"),
+//                m.utc_sec, m.utc_ms);
+
+//         if (k_msgq_put(&batt_q, &m, K_NO_WAIT) != 0) {
+//             struct batt_msg dump;
+//             (void)k_msgq_get(&batt_q, &dump, K_NO_WAIT);
+//             (void)k_msgq_put(&batt_q, &m, K_NO_WAIT);
+//         }
+
+//         k_msleep(SAMPLE_PERIOD_MS);
+//     }
+// }
+
 void max17048_thread(void) {
 
     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
@@ -521,7 +575,22 @@ void max17048_thread(void) {
         LOG_ERR("MAX17048 fuel gauge not ready");
         return;
     }
-    LOG_INF("MAX17048 fuel gauge ready");
+
+    /* Quick-start: forces MAX17048 to re-measure OCV and re-estimate SoC.
+     * Write 0x4000 to COMMAND register (0x06) via raw I2C.
+     * Required after battery swap or first boot with new pack. */
+    const struct device *i2c = DEVICE_DT_GET(DT_NODELABEL(i2c0));
+    uint8_t qs_buf[3] = { 0x06, 0x40, 0x00 };
+
+    int qsr = i2c_write(i2c, qs_buf, sizeof(qs_buf), 0x36);
+    if (qsr != 0) {
+        LOG_WRN("MAX17048 quick-start failed (%d) — SoC may be inaccurate", qsr);
+    } else {
+        LOG_INF("MAX17048 quick-start triggered — settling 175ms");
+        k_msleep(175); /* one ADC conversion cycle */
+    }
+
+    LOG_INF("MAX17048 ready");
 
     while (1) {
         union fuel_gauge_prop_val voltage, soc, tte, ttf;

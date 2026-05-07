@@ -94,8 +94,7 @@ void sd_drain_thread(void);
  * Do not call these directly. Use SD_LOG_BOOT() and SD_LOG_UTC() below,
  * which derive sizeof from the pointer type automatically.
  * ─────────────────────────────────────────────────────────────────────────── */
-void sd_log_write_boot(const char *path, const void *msg, size_t len);
-void sd_log_write_utc (const char *path, const void *msg, size_t len);
+void sd_log_write(const char *path, const void *msg, size_t len);
 
 /* ── Typed callsite macros ───────────────────────────────────────────────── *
  * sizeof(*(msg_ptr)) is resolved at compile time from the pointer type,
@@ -106,10 +105,10 @@ void sd_log_write_utc (const char *path, const void *msg, size_t len);
  *   SD_LOG_UTC (SD_LOG_BME280,          &msg);
  * ─────────────────────────────────────────────────────────────────────────── */
 #define SD_LOG_BOOT(path, msg_ptr) \
-    sd_log_write_boot((path), (msg_ptr), sizeof(*(msg_ptr)))
+    sd_log_write((path), (msg_ptr), sizeof(*(msg_ptr)))
 
 #define SD_LOG_UTC(path, msg_ptr) \
-    sd_log_write_utc((path), (msg_ptr), sizeof(*(msg_ptr)))
+    sd_log_write((path), (msg_ptr), sizeof(*(msg_ptr)))
 
 /* ── Boot archive path accessors ─────────────────────────────────────────── *
  * Returns the boot-numbered path built once at sd_log_init().

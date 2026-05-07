@@ -18,7 +18,8 @@
 
 #include "azure_mqtt.h"
 #include "bluetooth.h"
-#include "sntp_sync.h"
+// #include "sntp_sync.h"
+#include "http_time_sync.h"
 
 #if defined(CONFIG_ETH_GATEWAY)
 #  include "ethernet.h"
@@ -83,8 +84,9 @@ int main(void)
     k_sleep(K_SECONDS(3));
 
     LOG_INF("Starting SNTP sync");
-    sntp_sync_start();
-
+    // sntp_sync_start();
+    http_time_sync_start();
+    // http_time_sync_start();
     LOG_INF("Boot complete — BLE threads will start in ~15s");
 
     return 0;

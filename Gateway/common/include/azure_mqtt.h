@@ -50,7 +50,7 @@
  * MQTT connection settings
  * --------------------------------------------------------------------- */
 /* Plaintext port for Oracle bridge — no TLS on device */
-#define AZURE_MQTT_PORT      1883
+#define AZURE_MQTT_PORT      443
 #define AZURE_MQTT_CLIENT_ID AZURE_DEVICE_ID
 
 /* Username/password not required for anonymous Oracle bridge connection */

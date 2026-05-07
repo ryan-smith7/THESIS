@@ -16,4 +16,5 @@ target_sources(app PRIVATE
     ../common/src/my_json.c
     ../common/src/sntp_sync.c
     ../common/src/time_sync_writer.c
+    ../common/src/http_time_sync.c
 )

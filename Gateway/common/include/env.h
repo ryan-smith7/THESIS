@@ -4,6 +4,9 @@
 #define PHONE_SSID    "Ryan IPhone 12 Mini"
 #define PHONE_PSK     "Cedar2019!"
 
+// #define PHONE_SSID    "GL-A1300"
+// #define PHONE_PSK     "RR22M3ZC6J"
+
 /* Wi-Fi credentials */
 #define CONFIG_WIFI_DEFAULT_SSID    PHONE_SSID
 #define CONFIG_WIFI_DEFAULT_PSK     PHONE_PSK 

@@ -265,11 +265,16 @@ int write_raw_to_file(const char *fname, const uint8_t *data, size_t len)
 
 	/* Write payload */
 	fr = f_write(&fil, data, len, &bw);
-	if (fr != FR_OK || bw != len) {
-		LOG_ERR("FAIL: f_write payload %s: %d (wrote %u of %u)",
-			fatpath, fr, bw, (unsigned)len);
+	if (bw != len) {
+		LOG_ERR("FAIL: f_write payload %s — disk full (wrote %u of %u)",
+				fatpath, bw, (unsigned)len);
 		f_close(&fil);
-		return -EIO;
+		return -ENOSPC;   /* short write = disk full, fatal */
+	}
+	if (fr != FR_OK) {
+		LOG_ERR("FAIL: f_write payload %s: %d", fatpath, fr);
+		f_close(&fil);
+		return -EIO;      /* other error = may be transient */
 	}
 
 	/* Compute and append CRC32 trailer (little-endian) */
