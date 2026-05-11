@@ -1,6 +1,8 @@
 #ifndef ETHERNET_H_
 #define ETHERNET_H_
 
+#include <stdbool.h>
+#include <zephyr/kernel.h>
 /**
  * @file ethernet.h
  * @brief Ethernet connection management for ESP32-POE (LAN8720 via RMII).
@@ -28,5 +30,10 @@ void ethernet_callbacks_init(void);
  * then k_thread_join() on it before starting Azure MQTT.
  */
 void ethernet_thread(void);
+
+
+bool ethernet_wait_ready(k_timeout_t timeout);
+
+bool ethernet_is_ready(void);
 
 #endif /* ETHERNET_H_ */

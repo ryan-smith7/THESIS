@@ -75,8 +75,9 @@ int main(void)
                     NULL, NULL, NULL,
                     NET_THREAD_PRIO, 0, K_NO_WAIT);
     k_thread_name_set(&net_tid, "net");
-    k_thread_join(&net_tid, K_FOREVER);   /* block until IP obtained */
-
+    // k_thread_join(&net_tid, K_FOREVER);   /* block until IP obtained */
+    ethernet_wait_ready(K_FOREVER);
+    
     LOG_INF("Network ready — starting Azure MQTT");
     azure_mqtt_thread_start();
 

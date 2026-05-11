@@ -60,12 +60,12 @@ static int do_http_time_query(uint32_t *utc_out, uint16_t *ms_out) {
         return -errno;
     }
 
-    /* Connect timeout */
     struct zsock_timeval tv = {
         .tv_sec  = TIME_TIMEOUT_MS / 1000,
         .tv_usec = 0
     };
     zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    zsock_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     int ret = zsock_connect(sock, (struct sockaddr *)&addr, sizeof(addr));
     if (ret < 0) {
@@ -74,7 +74,6 @@ static int do_http_time_query(uint32_t *utc_out, uint16_t *ms_out) {
         return -errno;
     }
 
-    /* Send GET request */
     ret = zsock_send(sock, HTTP_GET, strlen(HTTP_GET), 0);
     if (ret < 0) {
         LOG_ERR("Send failed: %d", errno);
@@ -82,25 +81,33 @@ static int do_http_time_query(uint32_t *utc_out, uint16_t *ms_out) {
         return -errno;
     }
 
-    /* Receive response */
-    char buf[128] = {0};
-    ret = zsock_recv(sock, buf, sizeof(buf) - 1, 0);
+    /* Read until EOF — HTTP/1.0 server closes after body */
+    char buf[256] = {0};
+    size_t total = 0;
+
+    while (total < sizeof(buf) - 1) {
+        int n = zsock_recv(sock, buf + total, sizeof(buf) - 1 - total, 0);
+        if (n < 0) {
+            LOG_ERR("Recv failed: %d", errno);
+            zsock_close(sock);
+            return -errno;
+        }
+        if (n == 0) {
+            break;  /* server closed — full response received */
+        }
+        total += n;
+    }
     zsock_close(sock);
 
-    if (ret < 0) {
-        LOG_ERR("Recv failed: %d", errno);
-        return -errno;
-    }
+    buf[total] = '\0';
 
-    /* Find body — after \r\n\r\n */
     char *body = strstr(buf, "\r\n\r\n");
     if (!body) {
-        LOG_ERR("No HTTP body found");
+        LOG_ERR("No HTTP body found in %u bytes", (unsigned)total);
         return -EBADMSG;
     }
     body += 4;
 
-    /* Parse "seconds.milliseconds" */
     char *dot = strchr(body, '.');
     *utc_out = (uint32_t)atoi(body);
     *ms_out  = dot ? (uint16_t)atoi(dot + 1) : 0;
@@ -110,7 +117,6 @@ static int do_http_time_query(uint32_t *utc_out, uint16_t *ms_out) {
         return -EBADMSG;
     }
 
-    /* Store for http_time_get_utc() */
     last_utc_time   = *utc_out;
     last_utc_ms     = *ms_out;
     last_utc_set_ms = k_uptime_get_32();

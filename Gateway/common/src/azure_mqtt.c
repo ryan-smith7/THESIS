@@ -20,6 +20,11 @@
 #include <string.h>
 #include <errno.h>
 
+#ifdef CONFIG_ETH_GATEWAY
+    #include "ethernet.h"
+#endif
+
+
 LOG_MODULE_REGISTER(azure_mqtt, LOG_LEVEL_INF);
 
 /* ── Ring buffer ─────────────────────────────────────────── */
@@ -262,6 +267,19 @@ void azure_mqtt_thread(void) {
     struct zsock_pollfd fds;
 
     while (true) {
+
+        #ifdef CONFIG_ETH_GATEWAY
+        if (!ethernet_is_ready()) {
+            if (connected) {
+                LOG_WRN("Ethernet down — aborting MQTT client");
+                mqtt_abort(&client);
+                connected = false;
+            }
+            ethernet_wait_ready(K_FOREVER);
+            continue;
+        }
+        #endif
+
         /* Reconnect if needed */
         if (!connected) {
             LOG_INF("Connecting to Oracle MQTT bridge ...");

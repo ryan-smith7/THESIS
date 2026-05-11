@@ -523,58 +523,56 @@ static uint8_t sound_notify_func(struct bt_conn *conn,
  * sensor → sound → bme → ens → as7 → mst → bat → done
  * ═══════════════════════════════════════════════════════════ */
 
-#define MODALITY_DISC_FUNCS(name, next_fn, notify_fn)                        \
-static uint8_t name##_cccd_disc_func(struct bt_conn *conn,                   \
-                                      const struct bt_gatt_attr *attr,        \
-                                      struct bt_gatt_discover_params *params) \
-{                                                                             \
-    int index = get_conn_index(conn);                                         \
-    if (!attr) {                                                              \
-        LOG_ERR("[" #name " %d] CCCD not found", index);                     \
-        next_fn(conn, index);                                                 \
-        return BT_GATT_ITER_STOP;                                             \
-    }                                                                         \
-    name##_ccc_handles[index]       = attr->handle;                          \
-    name##_subs[index].ccc_handle   = name##_ccc_handles[index];             \
-    name##_subs[index].value_handle = name##_char_handles[index];            \
-    name##_subs[index].notify       = notify_fn;                             \
-    name##_subs[index].value        = BT_GATT_CCC_NOTIFY;                   \
-    int err = bt_gatt_subscribe(conn, &name##_subs[index]);                  \
-    if (err) LOG_ERR("[" #name " %d] subscribe failed (%d)", index, err);    \
-    else     LOG_INF("[" #name " %d] subscribed", index);                    \
-    next_fn(conn, index);                                                     \
-    return BT_GATT_ITER_STOP;                                                 \
-}                                                                             \
-static uint8_t name##_disc_func(struct bt_conn *conn,                        \
-                                 const struct bt_gatt_attr *attr,             \
-                                 struct bt_gatt_discover_params *params)      \
-{                                                                             \
-    int index = get_conn_index(conn);                                         \
-    if (!attr) {                                                              \
-        LOG_ERR("[" #name " %d] char not found", index);                     \
-        next_fn(conn, index);                                                 \
-        return BT_GATT_ITER_STOP;                                             \
-    }                                                                         \
-    const struct bt_gatt_chrc *chrc = attr->user_data;                      \
-    name##_char_handles[index] = chrc->value_handle;                         \
-    name##_cccd_disc[index].uuid         = &cccd_uuid.uuid;                  \
-    name##_cccd_disc[index].start_handle = name##_char_handles[index];       \
-    name##_cccd_disc[index].end_handle   = 0xffff;                           \
-    name##_cccd_disc[index].type         = BT_GATT_DISCOVER_ATTRIBUTE;       \
-    name##_cccd_disc[index].func         = name##_cccd_disc_func;            \
-    int err = bt_gatt_discover(conn, &name##_cccd_disc[index]);              \
-    if (err) LOG_ERR("[" #name " %d] cccd discover failed (%d)", index, err);\
-    return BT_GATT_ITER_STOP;                                                 \
-}                                                                             \
-static void discover_##name##_char(struct bt_conn *conn, int index)          \
-{                                                                             \
-    name##_disc[index].uuid         = &name##_char_uuid.uuid;                \
-    name##_disc[index].func         = name##_disc_func;                      \
-    name##_disc[index].start_handle = 0x0001;                                \
-    name##_disc[index].end_handle   = 0xffff;                                \
-    name##_disc[index].type         = BT_GATT_DISCOVER_CHARACTERISTIC;       \
-    int err = bt_gatt_discover(conn, &name##_disc[index]);                   \
-    if (err) LOG_ERR("[" #name " %d] discover failed (%d)", index, err);     \
+#define MODALITY_DISC_FUNCS(name, next_fn, notify_fn)                          \
+static uint8_t name##_cccd_disc_func(struct bt_conn *conn,                     \
+                                     const struct bt_gatt_attr *attr,          \
+                                     struct bt_gatt_discover_params *params)   \
+{                                                                              \
+    int index = get_conn_index(conn);                                          \
+    if (!attr) {                                                               \
+        LOG_ERR("[" #name " %d] CCCD not found", index);                       \
+        next_fn(conn, index);                                                  \
+        return BT_GATT_ITER_STOP;                                              \
+    }                                                                          \
+    name##_ccc_handles[index]       = attr->handle;                            \
+    name##_subs[index].ccc_handle   = name##_ccc_handles[index];               \
+    name##_subs[index].value_handle = name##_char_handles[index];              \
+    name##_subs[index].notify       = notify_fn;                               \
+    name##_subs[index].value        = BT_GATT_CCC_NOTIFY;                      \
+    LOG_INF("[" #name " %d] handles stashed", index);                          \
+    next_fn(conn, index);                                                      \
+    return BT_GATT_ITER_STOP;                                                  \
+}                                                                              \
+static uint8_t name##_disc_func(struct bt_conn *conn,                          \
+                                const struct bt_gatt_attr *attr,               \
+                                struct bt_gatt_discover_params *params)        \
+{                                                                              \
+    int index = get_conn_index(conn);                                          \
+    if (!attr) {                                                               \
+        LOG_ERR("[" #name " %d] char not found", index);                       \
+        next_fn(conn, index);                                                  \
+        return BT_GATT_ITER_STOP;                                              \
+    }                                                                          \
+    const struct bt_gatt_chrc *chrc = attr->user_data;                         \
+    name##_char_handles[index] = chrc->value_handle;                           \
+    name##_cccd_disc[index].uuid         = &cccd_uuid.uuid;                    \
+    name##_cccd_disc[index].start_handle = name##_char_handles[index];         \
+    name##_cccd_disc[index].end_handle   = 0xffff;                             \
+    name##_cccd_disc[index].type         = BT_GATT_DISCOVER_ATTRIBUTE;         \
+    name##_cccd_disc[index].func         = name##_cccd_disc_func;              \
+    int err = bt_gatt_discover(conn, &name##_cccd_disc[index]);                \
+    if (err) LOG_ERR("[" #name " %d] cccd discover failed (%d)", index, err);  \
+    return BT_GATT_ITER_STOP;                                                  \
+}                                                                              \
+static void discover_##name##_char(struct bt_conn *conn, int index)            \
+{                                                                              \
+    name##_disc[index].uuid         = &name##_char_uuid.uuid;                  \
+    name##_disc[index].func         = name##_disc_func;                        \
+    name##_disc[index].start_handle = 0x0001;                                  \
+    name##_disc[index].end_handle   = 0xffff;                                  \
+    name##_disc[index].type         = BT_GATT_DISCOVER_CHARACTERISTIC;         \
+    int err = bt_gatt_discover(conn, &name##_disc[index]);                     \
+    if (err) LOG_ERR("[" #name " %d] discover failed (%d)", index, err);       \
 }
 
 /* ── Sensor (chains to sound, no notify — time sync write target only) ── */
@@ -631,8 +629,60 @@ static void discover_sensor_char(struct bt_conn *conn, int index) {
 }
 
 static void discover_done(struct bt_conn *conn, int index) {
+    /* All handles now populated — subscribe to everything in one burst.
+     * Modalities skipped if their char/CCCD wasn't found (handle == 0). */
 
-    LOG_INF("[BASE %d] Discovery chain complete", index);
+    int err;
+
+    if (sound_char_handles[index] != 0 && sound_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &sound_subs[index]);
+        if (err) LOG_ERR("[sound %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[sound %d] subscribed", index);
+    }
+
+    if (bme_char_handles[index] != 0 && bme_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &bme_subs[index]);
+        if (err) LOG_ERR("[bme %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[bme %d] subscribed", index);
+    }
+
+    if (ens_char_handles[index] != 0 && ens_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &ens_subs[index]);
+        if (err) LOG_ERR("[ens %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[ens %d] subscribed", index);
+    }
+
+    if (as7_char_handles[index] != 0 && as7_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &as7_subs[index]);
+        if (err) LOG_ERR("[as7 %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[as7 %d] subscribed", index);
+    }
+
+    if (mst_char_handles[index] != 0 && mst_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &mst_subs[index]);
+        if (err) LOG_ERR("[mst %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[mst %d] subscribed", index);
+    }
+
+    if (bat_char_handles[index] != 0 && bat_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &bat_subs[index]);
+        if (err) LOG_ERR("[bat %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[bat %d] subscribed", index);
+    }
+
+    if (cur_char_handles[index] != 0 && cur_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &cur_subs[index]);
+        if (err) LOG_ERR("[cur %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[cur %d] subscribed", index);
+    }
+
+    if (ds18b20_char_handles[index] != 0 && ds18b20_ccc_handles[index] != 0) {
+        err = bt_gatt_subscribe(conn, &ds18b20_subs[index]);
+        if (err) LOG_ERR("[ds18b20 %d] subscribe failed (%d)", index, err);
+        else     LOG_INF("[ds18b20 %d] subscribed", index);
+    }
+
+    LOG_INF("[BASE %d] Discovery chain complete — all subscribed", index);
 }
 
 /* Expand modality discovery triplets — chain order: sound→bme→ens→as7→mst→bat→done */
