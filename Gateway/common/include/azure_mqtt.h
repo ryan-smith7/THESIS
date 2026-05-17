@@ -1,5 +1,5 @@
-#ifndef AZURE_MQTT_H_
-#define AZURE_MQTT_H_
+#ifndef MQTT_H_
+#define MQTT_H_
 
 #include <zephyr/kernel.h>
 #include <zephyr/net/mqtt.h>
@@ -68,4 +68,4 @@ void azure_mqtt_process(void);
 void azure_mqtt_thread(void);
 void azure_mqtt_thread_start(void);
 
-#endif /* AZURE_MQTT_H_ */
+#endif /* MQTT_H_ */

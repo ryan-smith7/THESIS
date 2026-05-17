@@ -1,0 +1,146 @@
+&i2c0 {
+
+    bme280@76 {
+        compatible = "bosch,bme280";
+        reg = <0x77>;
+        label = "BME280";
+    };
+
+    ens160@53 {
+        compatible = "sciosense,ens160";
+        reg = <0x53>;  /* or 0x52 depending on ADDR pin */
+        label = "ENS160";
+    };
+
+    as7343@39 {
+        compatible = "ams,as7343";
+        reg = <0x39>;
+        status = "okay";
+        label = "AS7343";
+    };
+
+    max17048@36 {
+        compatible = "maxim,max17048";
+        reg = <0x36>;
+        label = "MAX17048";
+    };
+};
+
+&pinctrl {
+    i2s0_default: i2s0_default {
+        group1 {
+            pinmux = <I2S0_O_WS_GPIO25>,
+                     <I2S0_O_BCK_GPIO26>,
+                     <I2S0_O_SD_GPIO27>;   /* TX data out — loopback pin */
+            output-enable;
+        };
+        group2 {
+            pinmux = <I2S0_I_SD_GPIO27>,   /* TX→RX internal loopback — keeps BCLK alive */
+                     <I2S0_I_SD_GPIO34>;   /* Mic data in (SPH0645 DOUT) */
+            input-enable;
+        };
+    };
+};
+
+&pinctrl {
+    i2s0_default: i2s0_default {
+        group1 {
+            pinmux = <I2S0_O_WS_GPIO25>,
+                     <I2S0_O_BCK_GPIO26>,
+                     <I2S0_O_SD_GPIO27>;   /* TX data out — loopback pin */
+            output-enable;
+        };
+        group2 {
+            pinmux = <I2S0_I_SD_GPIO34>;   /* Mic data in (SPH0645 DOUT) */
+            input-enable;
+        };
+    };
+};
+
+
+i2s_rxtx: &i2s0 {
+    status = "okay";
+
+    interrupts = <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>,
+                 <I2S0_INTR_SOURCE IRQ_DEFAULT_PRIORITY 0>;
+    interrupt-names = "tx", "rx";
+};
+
+&adc0 {
+    status = "okay";
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel@7 {
+        reg = <7>;
+        zephyr,gain = "ADC_GAIN_1_4";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,input-positive = <7>;
+        zephyr,resolution = <12>;
+    };
+};
+
+/ {
+    zephyr,user {
+        io-channels = <&adc0 7>;
+    };
+};
+
+/* Disable the onboard native SDHC controller to free the label */
+&sdhc0 {
+    status = "disabled";
+};
+
+&pinctrl {
+    spim2_default: spim2_default {
+        group1 {
+            pinmux = <SPIM2_MISO_GPIO19>,
+                     <SPIM2_MOSI_GPIO23>,
+                     <SPIM2_SCLK_GPIO18>;
+        };
+    };
+};
+
+&spi2 {
+    status = "okay";
+    pinctrl-0 = <&spim2_default>;
+    pinctrl-names = "default";
+    cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+
+    sdhc_spi: sdhc@0 {
+        compatible = "zephyr,sdhc-spi-slot";
+        reg = <0>;
+        status = "okay";
+        spi-max-frequency = <24000000>;
+
+        mmc {
+            compatible = "zephyr,sdmmc-disk";
+            disk-name = "SD";
+            status = "okay";
+        };
+    };
+};
+
+
+#include <zephyr/dt-bindings/pinctrl/esp32-pinctrl.h>
+
+&pinctrl {
+    uart2_default_w1: uart2_default_w1 {
+        group1 {
+            pinmux = <UART2_TX_GPIO17>;
+            bias-pull-up;
+        };
+        group2 {
+            pinmux = <UART2_RX_GPIO16>;
+            bias-pull-up;
+        };
+    };
+};
+
+&uart2 {
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart2_default_w1>;
+    pinctrl-names = "default";
+};

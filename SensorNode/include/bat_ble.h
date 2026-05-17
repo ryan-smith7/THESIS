@@ -3,7 +3,7 @@
 
 #include "sensor.h"
 
-#define BAT_BLE_STACK_SIZE  2048
+#define BAT_BLE_STACK_SIZE  768
 #define BAT_BLE_PRIORITY    6
 
 extern void bat_ble_thread(void);

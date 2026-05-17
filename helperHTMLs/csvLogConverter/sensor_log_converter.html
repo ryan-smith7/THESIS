@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sensor Log Converter</title>
+  <link rel="stylesheet" href="sensor_log_converter.css">
+</head>
+<body>
+
+<h1>Sensor Log Converter</h1>
+<div class="sub">.bin &rarr; .csv &nbsp;|&nbsp; boot archive + UTC upload files</div>
+
+<!-- ═══════════════ DROP ZONE ═══════════════ -->
+<label class="dropzone" id="dz" for="fi">
+  <div class="dt">Click to browse or drop .bin / .csv files here</div>
+  <div class="ds">
+    UTC upload files: <span>bme280.bin</span> <span>ens160.bin</span> <span>as7343.bin</span> <span>moisture.bin</span> <span>sound.bin</span> <span>ds18b20.bin</span><br>
+    Boot archive files: <span>BMEnnnn.BIN</span> <span>ENSnnnn.BIN</span> <span>AS7nnnn.BIN</span> <span>MSTnnnn.BIN</span> <span>SNDnnnn.BIN</span> <span>D18nnnn.BIN</span><br>
+    Previously exported CSVs: <span>bme280.csv</span> <span>ens160.csv</span> <span>as7343.csv</span> <span>moisture.csv</span> <span>sound.csv</span> <span>*_merged.csv</span>
+  </div>
+</label>
+<input type="file" id="fi" multiple accept=".bin,.csv" style="display:none">
+
+<!-- ═══════════════ FILE LIST ═══════════════ -->
+<div class="files" id="fl"></div>
+
+<!-- ═══════════════ MERGE PANEL ═══════════════ -->
+<div class="merge-panel" id="mp">
+  <div class="merge-title">&#9889; Boot archive + UTC upload merge detected</div>
+
+  <div class="merge-row" style="margin-bottom:14px">
+    <label>Offset input mode:</label>
+    <div class="toggle-group">
+      <button class="toggle-btn active" id="modeUnix" onclick="setMode('unix')">Unix seconds</button>
+      <button class="toggle-btn"        id="modeDt"   onclick="setMode('datetime')">Date &amp; time</button>
+    </div>
+  </div>
+
+  <div class="merge-row" id="rowUnix">
+    <label>UTC at boot (seconds):</label>
+    <input type="number" class="merge-input" id="offsetUnix" placeholder="e.g. 1776135432" step="1">
+    <span class="merge-hint">Unix timestamp at uptime=0 — only needed for pre-sync records without utc_sec</span>
+  </div>
+
+  <div class="merge-row" id="rowDt" style="display:none; flex-wrap:wrap; gap:8px">
+    <label style="width:100%">UTC boot time:</label>
+    <input type="number" class="merge-input-sm" id="dtDay"   placeholder="DD"   min="1"  max="31"   style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtMonth" placeholder="MM"   min="1"  max="12"   style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtYear"  placeholder="YYYY" min="2020" max="2099" style="width:76px">
+    <input type="number" class="merge-input-sm" id="dtHour"  placeholder="HH"   min="0"  max="23"   style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtMin"   placeholder="MM"   min="0"  max="59"   style="width:56px">
+    <input type="number" class="merge-input-sm" id="dtSec"   placeholder="SS"   min="0"  max="59"   style="width:56px">
+    <span class="merge-hint" style="width:100%">Day / Month / Year &nbsp; Hour : Minute : Second (UTC)</span>
+  </div>
+
+  <div class="merge-row" id="offsetPreview" style="margin-top:4px; display:none">
+    <span style="font-size:11px; color:#555568">Resolved: </span>
+    <span style="font-size:11px; color:#7fff6e" id="offsetResolved"></span>
+  </div>
+
+  <div class="merge-pairs" id="mergePairs"></div>
+</div>
+
+<!-- ═══════════════ CONVERT BUTTON + LOG ═══════════════ -->
+<button class="cvt" id="cb" disabled>Convert &amp; Download CSV</button>
+<div class="log" id="lg"></div>
+
+<!-- ═══════════════ UPLOAD PANEL ═══════════════ -->
+<div class="upload-panel">
+  <div class="upload-title">&#128451; Upload to SQL</div>
+
+  <div class="upload-row" style="margin-top:4px; margin-bottom:4px">
+    <label>Skip unsynced</label>
+    <div class="toggle-group">
+      <button class="toggle-btn active" id="skipOn"  onclick="setSkip(true)">Yes — skip utc_sec=0</button>
+      <button class="toggle-btn"        id="skipOff" onclick="setSkip(false)">No — upload all</button>
+    </div>
+  </div>
+  <div class="upload-hint" style="margin-bottom:10px">Pre-sync records have utc_sec=0 and no reliable timestamp</div>
+
+  <div id="devSection" style="display:none">
+    <div style="font-size:11px; color:#6eb8ff; margin-bottom:8px">&#9656; Per-file node assignment:</div>
+    <div class="dev-map" id="devMap"></div>
+  </div>
+
+  <div class="upload-progress-wrap" id="upProgressWrap">
+    <div class="upload-progress-bar" id="upProgressBar"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ SQL UPLOAD BUTTON + LOG ═══════════════ -->
+<button class="cvt-upload" id="sqlUploadBtn" disabled>&#128451; Upload to SQL</button>
+<div class="upload-stats" id="uploadStats"></div>
+<div class="log" id="ulg"></div>
+
+<script src="sensor_log_converter.js"></script>
+</body>
+</html>

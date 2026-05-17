@@ -48,7 +48,7 @@
 #define SOUND_BLE_PKT_SIZE  (SOUND_BLE_HDR_SIZE + SOUND_BLE_BINS_PER_PKT * 2U)
 
 /* ── Thread config ──────────────────────────────────────── */
-#define SOUND_BLE_STACK_SIZE  2048
+#define SOUND_BLE_STACK_SIZE  3072
 #define SOUND_BLE_PRIORITY    6     /* lower than sound_thread (4) */
 
 // extern struct k_sem snd_notify_sem;

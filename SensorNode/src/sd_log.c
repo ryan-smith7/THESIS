@@ -69,6 +69,7 @@
 LOG_MODULE_REGISTER(sd_log, LOG_LEVEL_INF);
 
 #define BOOT_PATH_MAX    24   /* e.g. "/SD/BME0003.BIN" = 16 chars, headroom */
+#define DRAIN_DELAY 30
 
 /* ── Drain semaphore — triggered by connected() callback ─────────────────── */
 K_SEM_DEFINE(sd_drain_sem, 0, 1);
@@ -370,7 +371,7 @@ static void drain_bme(void)
             continue;
         }
         k_mutex_unlock(&sd_mutex);
-
+        k_sleep(K_MSEC(DRAIN_DELAY));
         if (!bme_pack_and_notify(&row)) {
             LOG_WRN("SD drain BME: disconnected at record %d — %d remain in file",
                     count, (int)(rec_pos / stride));
@@ -443,7 +444,7 @@ static void drain_ens(void)
             continue;
         }
         k_mutex_unlock(&sd_mutex);
-
+        k_sleep(K_MSEC(DRAIN_DELAY));
         if (!ens_pack_and_notify(&row)) {
             LOG_WRN("SD drain ENS: disconnected at record %d — %d remain in file",
                     count, (int)(rec_pos / stride));
@@ -525,7 +526,7 @@ static void drain_snd(void)
             k_mutex_unlock(&sd_mutex);
             return;
         }
-
+        // k_sleep(K_MSEC(30));
         send_spectrum(&row);
         count++;
 
@@ -598,7 +599,7 @@ static void drain_as7(void)
             continue;
         }
         k_mutex_unlock(&sd_mutex);
-
+        k_sleep(K_MSEC(DRAIN_DELAY));
         if (!as7_pack_and_notify(&row)) {
             LOG_WRN("SD drain AS7: disconnected at record %d — %d remain in file",
                     count, (int)(rec_pos / stride));
@@ -674,7 +675,7 @@ static void drain_mst(void)
             continue;
         }
         k_mutex_unlock(&sd_mutex);
-
+        k_sleep(K_MSEC(DRAIN_DELAY));
         if (!mst_pack_and_notify(&row)) {
             LOG_WRN("SD drain MST: disconnected at record %d — %d remain in file",
                     count, (int)(rec_pos / stride));
@@ -749,7 +750,7 @@ static void drain_ds18b20(void)
             continue;
         }
         k_mutex_unlock(&sd_mutex);
- 
+        k_sleep(K_MSEC(DRAIN_DELAY));
         if (!ds18b20_pack_and_notify(&row)) {
             LOG_WRN("SD drain DS18B20: disconnected at record %d — %d remain in file",
                     count, (int)(rec_pos / stride));

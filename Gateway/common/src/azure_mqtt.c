@@ -112,11 +112,13 @@ static int do_connect(void) {
 
     LOG_INF("Connecting to %s:%d ...", AZURE_IOT_HUB_HOSTNAME, AZURE_MQTT_PORT);
 
+    /*this currently irrelevant should remove */
     int ret = getaddrinfo(AZURE_IOT_HUB_HOSTNAME, port_str, &hints, &result);
     if (ret != 0) {
-        LOG_ERR("DNS failed: %d", ret);
+        LOG_ERR("DNS reolve failed: %d", ret);
         return -ENETUNREACH;
     }
+    /*should remove above as no longer doing DNS*/
 
     broker4 = (struct sockaddr_in *)&broker_addr;
     broker4->sin_addr.s_addr =

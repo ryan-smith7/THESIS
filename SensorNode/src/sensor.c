@@ -13,13 +13,13 @@
 #include "ds18b20_direct.h"
 #include "sensor.h"
 #include "time_sync.h"
-
+#include <zephyr/sys/poweroff.h>
+#include <esp_sleep.h>
 #include <zephyr/drivers/adc.h>
 
 LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
 
 #define SAMPLE_PERIOD_MS 10000
-
 
 /* ── Moisture Sensor Polynomial Calibration ────────────────────────────────
  * θ_g (%) = a2·V² + a1·V + a0
@@ -41,6 +41,7 @@ LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
 #define SAMPLE_PERIOD_MOISTURE_MS       5000U
 #define SAMPLE_PERIOD_BATTERY_MS        60000U
 #define SAMPLE_PERIOD_SOIL_MS       5000U
+#define LOW_BATT_SLEEP_MV  3000
 
 static const struct adc_dt_spec moisture_adc =
     ADC_DT_SPEC_GET_BY_IDX(DT_PATH(zephyr_user), 0);
@@ -327,44 +328,6 @@ void as7343_thread(void) {
         msg.utc_sec   = time_sync_get_utc_ms(&msg.utc_ms);
         msg.uptime_ms = (uint64_t)k_uptime_get();
  
-        // /* Diagnostic prints ------------------------------------------------- */
-        // printk("RAW: %u %u %u %u %u %u %u %u %u %u %u %u\n",
-        //     drv->channel_data[12],  /* F1  405nm */
-        //     drv->channel_data[6],   /* F2  425nm */
-        //     drv->channel_data[0],   /* FZ  450nm */
-        //     drv->channel_data[7],   /* F3  475nm */
-        //     drv->channel_data[8],   /* F4  515nm */
-        //     drv->channel_data[15],  /* F5  550nm */
-        //     drv->channel_data[1],   /* FY  555nm */
-        //     drv->channel_data[2],   /* FXL 600nm */
-        //     drv->channel_data[9],   /* F6  640nm */
-        //     drv->channel_data[13],  /* F7  690nm */
-        //     drv->channel_data[14],  /* F8  745nm */
-        //     drv->channel_data[3]);  /* NIR 855nm */
- 
-        // printk("AS7 put: "
-        //        "405nm=%.2f 425nm=%.2f 450nm=%.2f 475nm=%.2f "
-        //        "515nm=%.2f 550nm=%.2f 555nm=%.2f 600nm=%.2f "
-        //        "640nm=%.2f 690nm=%.2f 745nm=%.2f 855nm=%.2f "
-        //        "SUM=%.2f VIS=%.2f mW/m2 UTC=%u.%03u\n",
-        //        msg.ch[0]  / 1000.0f,
-        //        msg.ch[1]  / 1000.0f,
-        //        msg.ch[2]  / 1000.0f,
-        //        msg.ch[3]  / 1000.0f,
-        //        msg.ch[4]  / 1000.0f,
-        //        msg.ch[5]  / 1000.0f,
-        //        msg.ch[6]  / 1000.0f,
-        //        msg.ch[7]  / 1000.0f,
-        //        msg.ch[8]  / 1000.0f,
-        //        msg.ch[9]  / 1000.0f,
-        //        msg.ch[10] / 1000.0f,
-        //        msg.ch[11] / 1000.0f,
-        //        (msg.ch[0] + msg.ch[1] + msg.ch[2]  + msg.ch[3] +
-        //         msg.ch[4] + msg.ch[5] + msg.ch[6]  + msg.ch[7] +
-        //         msg.ch[8] + msg.ch[9] + msg.ch[10] + msg.ch[11]) / 1000.0f,
-        //        msg.ch[12] / 1000.0f,
-        //        msg.utc_sec, msg.utc_ms);
- 
         if (k_msgq_put(&as7_q, &msg, K_NO_WAIT) != 0) {
             struct as7343_msg dump;
             (void)k_msgq_get(&as7_q, &dump, K_NO_WAIT);
@@ -511,64 +474,9 @@ void ds18b20_thread(void)
 }
 
 #if defined(CONFIG_FUEL_GAUGE)
-/* -------------------------------------------------------------------------- */
-/* --- MAX17048 Fuel Gauge thread (commented — enable when hardware ready) -- */
-// void max17048_thread(void) {
-
-//     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
-
-//     if (!device_is_ready(dev)) {
-//         LOG_ERR("MAX17048 fuel gauge not ready");
-//         return;
-//     }
-//     LOG_INF("MAX17048 fuel gauge ready");
-
-//     while (1) {
-//         union fuel_gauge_prop_val voltage, soc, tte, ttf;
-
-//         int rv  = fuel_gauge_get_prop(dev, FUEL_GAUGE_VOLTAGE,                  &voltage);
-//         int rs  = fuel_gauge_get_prop(dev, FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE, &soc);
-//         int rte = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_EMPTY,         &tte);
-//         int rtf = fuel_gauge_get_prop(dev, FUEL_GAUGE_RUNTIME_TO_FULL,          &ttf);
-
-//         if (rv != 0 || rs != 0) {
-//             LOG_ERR("MAX17048: read failed (rv=%d rs=%d)", rv, rs);
-//             k_msleep(SAMPLE_PERIOD_MS);
-//             continue;
-//         }
-
-//         int16_t rate_x10 = 0;
-//         if (rtf == 0 && ttf.runtime_to_full > 0)        rate_x10 = +10;
-//         else if (rte == 0 && tte.runtime_to_empty > 0)  rate_x10 = -10;
-
-//         uint16_t bat_utc_ms;
-//         uint32_t bat_utc_sec = time_sync_get_utc_ms(&bat_utc_ms);
-
-//         struct batt_msg m = {
-//             .mV       = (uint16_t)(voltage.voltage / 1000),
-//             .pct      = (uint8_t)CLAMP(soc.relative_state_of_charge, 0, 100),
-//             .rate_x10 = rate_x10,
-//             .utc_sec  = bat_utc_sec,
-//             .utc_ms   = bat_utc_ms,
-//         };
-
-//         printk("BATT: %u mV  %u%%  %s  UTC=%u.%03u\n",
-//                m.mV, m.pct,
-//                rate_x10 > 0 ? "charging" : (rate_x10 < 0 ? "discharging" : "unknown"),
-//                m.utc_sec, m.utc_ms);
-
-//         if (k_msgq_put(&batt_q, &m, K_NO_WAIT) != 0) {
-//             struct batt_msg dump;
-//             (void)k_msgq_get(&batt_q, &dump, K_NO_WAIT);
-//             (void)k_msgq_put(&batt_q, &m, K_NO_WAIT);
-//         }
-
-//         k_msleep(SAMPLE_PERIOD_MS);
-//     }
-// }
 
 void max17048_thread(void) {
-
+    uint8_t low_count = 0;
     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);
 
     if (!device_is_ready(dev)) {
@@ -625,6 +533,22 @@ void max17048_thread(void) {
                m.mV, m.pct,
                rate_x10 > 0 ? "charging" : (rate_x10 < 0 ? "discharging" : "unknown"),
                m.utc_sec, m.utc_ms);
+
+        /* Firmware low-voltage cutoff */
+        if (m.mV < LOW_BATT_SLEEP_MV) {
+            low_count++;
+        } else {
+            low_count = 0;
+        }
+
+        if (low_count >= 3) {
+            LOG_WRN("Battery below threshold: %u mV", m.mV);
+
+            printk("LOW BATTERY — ENTERING DEEP SLEEP\n");
+
+            sys_poweroff();
+            CODE_UNREACHABLE;
+        }
 
         if (k_msgq_put(&batt_q, &m, K_NO_WAIT) != 0) {
             struct batt_msg dump;

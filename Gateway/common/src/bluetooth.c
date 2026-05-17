@@ -148,14 +148,15 @@ struct sound_reassembly {
 };
 static struct sound_reassembly sound_rx[MAX_CONN];
 
+#define MSQ_Q_LENGTH 16
 /* ── Message queues ─────────────────────────────────────── */
-K_MSGQ_DEFINE(bme_msgq, sizeof(mod_bme_t),  MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(ens_msgq, sizeof(mod_ens_t),  MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(as7_msgq, sizeof(mod_spec_t), MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(mst_msgq, sizeof(mod_mst_t),  MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(bat_msgq, sizeof(mod_bat_t),  MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(cur_msgq,   sizeof(mod_cur_t), MSGQ_MAX_MSGS, 4);
-K_MSGQ_DEFINE(ds18b20_msgq, sizeof(mod_ds18b20_t), MSGQ_MAX_MSGS, 4);
+K_MSGQ_DEFINE(bme_msgq, sizeof(mod_bme_t),  MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
+K_MSGQ_DEFINE(ens_msgq, sizeof(mod_ens_t),  MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
+K_MSGQ_DEFINE(as7_msgq, sizeof(mod_spec_t), MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
+K_MSGQ_DEFINE(mst_msgq, sizeof(mod_mst_t),  MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
+K_MSGQ_DEFINE(bat_msgq, sizeof(mod_bat_t),  MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
+K_MSGQ_DEFINE(cur_msgq,   sizeof(mod_cur_t), MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
+K_MSGQ_DEFINE(ds18b20_msgq, sizeof(mod_ds18b20_t), MSGQ_MAX_MSGS, MSQ_Q_LENGTH);
 
 struct sound_queue_pkt_t { mod_snd_t sp; };
 K_MSGQ_DEFINE(sound_msgq, sizeof(struct sound_queue_pkt_t), 2, 4);
@@ -470,7 +471,7 @@ static uint8_t sound_notify_func(struct bt_conn *conn,
     uint8_t  pkt_id  = buf[0];
     uint8_t  total   = buf[1];
     uint32_t utc_sec = be32(buf + 2);  /* 4 bytes */
-    uint16_t utc_ms  = be16(buf + 6);  /* 2 bytes — NEW */
+    uint16_t utc_ms  = be16(buf + 6);  
 
     if (pkt_id >= SOUND_NUM_PKTS || total != SOUND_NUM_PKTS) {
         return BT_GATT_ITER_CONTINUE;
@@ -706,6 +707,7 @@ static void start_scan(void) {
         .interval = BT_GAP_SCAN_FAST_INTERVAL,
         .window   = BT_GAP_SCAN_FAST_WINDOW,
     };
+    k_sleep(K_MSEC(1500));
     int err = bt_le_scan_start(&scan_params, device_found);
     if (err) {
         LOG_ERR("[BASE] Scan failed (%d)", err);
@@ -808,6 +810,8 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         if (conns[i] && i != index) active++;
     }
     /* First node starts immediately, second waits 3s */
+    /*This prevents the two discovery chains from issuing concurrent bt_gatt_discover()
+        calls over the BLE stack which can cause them to step on each other.*/
     k_work_schedule(&disc_work[index], K_MSEC(active > 0 ? 3000 : 0));
     k_work_submit(&scan_start_work);
 
@@ -833,7 +837,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     }
     // k_sleep(K_MSEC(500));  /* brief settle before restarting scan */
     // start_scan();
-    k_work_submit(&scan_start_work);
+    // k_sleep(K_MSEC(500));
+    // k_work_submit(&scan_start_work);
 }
 
 static struct bt_conn_cb conn_callbacks = {

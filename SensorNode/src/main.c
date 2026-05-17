@@ -61,7 +61,7 @@ K_THREAD_DEFINE(sd_drain_tid, 4096, sd_drain_thread,
 
 #if defined(CONFIG_FUEL_GAUGE)
 // Battery — uncomment later
-K_THREAD_DEFINE(max17048_tid, STACK_SIZE_SENSOR, max17048_thread,
+K_THREAD_DEFINE(max17048_tid, 1024, max17048_thread,
                 NULL, NULL, NULL,
                 BME280_THREAD_PRIORITY, 0, 0);
 K_THREAD_DEFINE(bat_ble_tid, BAT_BLE_STACK_SIZE, bat_ble_thread,

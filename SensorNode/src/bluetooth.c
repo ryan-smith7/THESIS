@@ -80,7 +80,7 @@ static struct bt_conn_cb conn_callbacks = {
 
 static K_SEM_DEFINE(adv_restart_sem, 0, 1);
 
-/*
+/* THIS NEEDS TO BE REDUCED AS PACK_DATA NOT LONGER USED THIS IS STILL UTILISED FOR CONNECTION HOWEVER
 GATT (Generic Attribute Profile) is a protocol used in Bluetooth Low Energy (BLE) 
 defining how data is structured, discovered, and exchanged between devices. 
 Data is organised into services and characteristics.
@@ -98,7 +98,7 @@ BT_GATT_SERVICE_DEFINE(custom_svc, //custom service
         0x12, 0x34,
         0x56, 0x78,
         0x12, 0x34,
-        0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0)),
+        0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0)), //this is repeated above need to optimise code here
     BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128( //characteristic defined within the service
         0x99, 0x88, 0x77, 0x66,
         0x55, 0x44,
@@ -348,6 +348,8 @@ extern int stop_advertising_and_disconnect() {
     return 0;
 }
 
+#include <zephyr/sys/poweroff.h>
+#include <esp_sleep.h>
 /*
  *
  * Initialise BT, start advertising once, then block forever.

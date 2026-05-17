@@ -39,6 +39,8 @@ LOG_MODULE_REGISTER(sntp_sync, LOG_LEVEL_INF);
 #define SNTP_STACK_SIZE  2048
 #define SNTP_PRIORITY    6
 
+
+
 /*
  * Stack placement: SPIRAM on WROVER, internal DRAM on POE.
  * Z_KERNEL_STACK_DEFINE_IN is a Zephyr internal macro; K_THREAD_STACK_DEFINE
