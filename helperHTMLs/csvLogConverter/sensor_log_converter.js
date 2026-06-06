@@ -183,7 +183,7 @@ const MODALITIES = {
         const o = i * recSz; if (!verifyCrc(b, o, structSz)) { corrupt++; continue; }
         const bins = [], binOff = hasUptime ? o + 16 : o + 8;
         for (let j = 0; j < SOUND_NUM_BINS; j++) bins.push(d.getUint16(binOff + j * 2, true));
-        r.push({ s: d.getUint32(o, true), ms: d.getUint16(o + 4, true), rms: d.getInt16(o + 6, true) / 100, uptime_ms: hasUptime ? getUint64(d, o + 8) : 0, bins });
+        r.push({ s: d.getUint32(o, true), ms: d.getUint16(o + 4, true), rms: (d.getInt16(o + 6, true) / 100) + 120, uptime_ms: hasUptime ? getUint64(d, o + 8) : 0, bins });
       }
       if (corrupt) logLine('sound: ' + corrupt + ' corrupt record(s) skipped', 'er');
       if (!hasUptime) logLine('sound: old layout detected — uptime will be 0', 'mg');

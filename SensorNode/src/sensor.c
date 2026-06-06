@@ -16,6 +16,9 @@
 #include <zephyr/sys/poweroff.h>
 #include <esp_sleep.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/i2c.h>
+
+static const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c0));
 
 LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
 
@@ -271,13 +274,19 @@ static int wl_index(int nm) {
 }
  
 void as7343_thread(void) {
+
+    k_msleep(10000);
     const struct device *dev = DEVICE_DT_GET_ONE(ams_as7343);
- 
+
+        // In your sensor init, after AS7343 readiness check fails:
     if (!device_is_ready(dev)) {
         LOG_ERR("AS7343 device not ready");
-        return;
+        int rc = i2c_recover_bus(i2c_dev);
+        if (rc) {
+            LOG_WRN("I2C bus recovery failed (%d)", rc);
+        }
     }
- 
+
     LOG_INF("AS7343 device ready");
  
     /* Dark offset calibration — sensor must be covered at this point.        */

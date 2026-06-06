@@ -45,8 +45,8 @@
 &pinctrl {
     i2s0_default: i2s0_default {
         group1 {
-            pinmux = <I2S0_O_WS_GPIO25>,
-                     <I2S0_O_BCK_GPIO26>,
+            pinmux = <I2S0_O_WS_GPIO25>,    /* Word */
+                     <I2S0_O_BCK_GPIO26>,  /* Clock */
                      <I2S0_O_SD_GPIO27>;   /* TX data out — loopback pin */
             output-enable;
         };

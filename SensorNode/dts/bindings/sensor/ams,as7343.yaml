@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
 description: AMS AS7343 multispectral light sensor
 
 compatible: "ams,as7343"
@@ -9,3 +8,5 @@ properties:
   reg:
     required: true
     description: I2C address (default 0x39)
+
+

@@ -18,7 +18,7 @@
 LOG_MODULE_REGISTER(time_sync, LOG_LEVEL_INF);
 
 /* ── Constants ──────────────────────────────────────────── */
-#define SYNC_WINDOW_SIZE  8    /* number of sync points for regression */
+#define SYNC_WINDOW_SIZE  32    /* number of sync points for regression */
 
 /* ── Sync point ─────────────────────────────────────────── */
 struct sync_point {

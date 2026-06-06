@@ -268,6 +268,7 @@ static int do_sntp_sync(uint32_t *utc_out, uint16_t *ms_out) {
     int64_t t2_utc = (int64_t)t2_sec * 1000 + t2_ms;
     int64_t t3_utc = (int64_t)t3_sec * 1000 + t3_ms;
     int64_t rtt    = t4 - t1;
+    int64_t rttpos    = t4 + t1;
 
     /* θ = ((t2 − t1) + (t3 − t4)) / 2 — equals UTC_ms − uptime_ms          */
     utc_offset_ms = ((t2_utc - t1) + (t3_utc - t4)) / 2;
@@ -288,6 +289,16 @@ static int do_sntp_sync(uint32_t *utc_out, uint16_t *ms_out) {
             tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
             tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec,
             rtt, utc_offset_ms);
+
+    LOG_INF("SNTP detail: "
+        "t1=%" PRId64 " t4=%" PRId64 " rtt=%" PRId64
+        "  fwd=(t2-t1)=%" PRId64
+        "  ret=(t3-t4)=%" PRId64
+        "  asymmetry=%" PRId64,
+        t1, t4, rtt,
+        (t2_utc - t1),
+        (t3_utc - t4),
+        (t2_utc - t1) + (t3_utc - t4));
 
     return 0;
 }

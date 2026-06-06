@@ -80,3 +80,43 @@ Firmware defines:
 # ── Curve points for plotting ────────────────────────────────────────────────
 adc_curve   = np.linspace(950, 2450, 200)
 theta_curve = np.clip(np.polyval(coeffs, adc_curve), 0, 140)
+
+
+
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(9, 5))
+
+# Calibration samples (excluding dry anchor)
+ax.scatter(adc[1:], theta_g[1:],
+           color='steelblue', s=60, zorder=5,
+           label='Calibration samples')
+
+# Dry anchor
+ax.scatter(adc[0], theta_g[0],
+           color='darkorange', marker='*', s=180, zorder=6,
+           label=f'Dry anchor (ADC={int(adc[0])}, 0%)')
+
+# Fitted curve
+ax.plot(adc_curve, theta_curve,
+        color='crimson', linewidth=2,
+        label=f'3rd-order polynomial fit  (R² = {r2:.4f},  RMSE = {rmse:.2f} %)')
+
+# Residual stems
+predicted_pts = np.polyval(coeffs, adc)
+for v, m, p in zip(adc, theta_g, predicted_pts):
+    ax.plot([v, v], [m, p], color='grey', linewidth=0.8, alpha=0.6)
+
+ax.set_xlabel('ADC Raw Count (12-bit)', fontsize=11)
+ax.set_ylabel('Gravimetric Moisture Content  θ_g (%)', fontsize=11)
+ax.set_title('Capacitive Soil Moisture Sensor — Calibration Curve', fontsize=12)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.25)
+ax.set_xlim(900, 2500)
+ax.set_ylim(-5, 120)
+ax.invert_xaxis()   # higher ADC = drier → left side wetter, right side drier
+
+plt.tight_layout()
+plt.savefig('moisture_calibration_curve.png', dpi=150, bbox_inches='tight')
+plt.show()
+print("Saved: moisture_calibration_curve.png")
