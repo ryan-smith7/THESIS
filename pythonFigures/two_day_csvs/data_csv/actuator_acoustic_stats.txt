@@ -1,3 +1,0 @@
-Dominant elevated frequency: 2150 Hz
-Mean SPL elevation at dominant bin: 7.88 dB
-Peak freq across actuation frames: mean=43 Hz  std=0 Hz  median=43 Hz

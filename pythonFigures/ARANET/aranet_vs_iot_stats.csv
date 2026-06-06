@@ -1,7 +1,0 @@
-Comparison,Unit,Resample interval,N bins,Bias,MAE,RMSE,Pearson r,p-value
-Aranet vs BME280 (Temperature),°C,30s,5,+1.7739,1.7739,1.7740,N/A (constant),N/A
-BME280 vs DS18B20 in-substrate (Temperature),°C,5s,60,-0.8263,0.8263,0.8265,0.2132,0.101991
-Aranet vs DS18B20 in-substrate (Temperature),°C,30s,5,+0.9497,0.9497,0.9498,N/A (constant),N/A
-Aranet vs BME280 (Relative Humidity),%,30s,5,-19.1531,19.1531,19.1627,N/A (constant),N/A
-Aranet vs BME280 (Pressure),hPa,30s,5,+2.5324,2.5324,2.5326,N/A (constant),N/A
-Aranet vs BME280 (CO₂ / eCO₂),ppm,30s,5,-21.2342,21.2342,21.7556,-0.5538,0.332766
