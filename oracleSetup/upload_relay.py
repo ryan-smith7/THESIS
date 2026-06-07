@@ -16,7 +16,7 @@ CORS(app)
 SQL_SERVER   = 'iot-telemetry-server-ryan-smith.database.windows.net'
 SQL_DATABASE = 'iot-telemetry-db'
 SQL_USER     = 'sqladmin'
-SQL_PASSWORD = 'cEgjuz-jetsod-5xybpa'  # ← fill in
+SQL_PASSWORD = ''  # ← fill in
 
 SQL_CONN_STR = (
     f"Driver={{ODBC Driver 18 for SQL Server}};"

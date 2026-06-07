@@ -26,7 +26,7 @@ import pandas as pd
 SERVER   = 'iot-telemetry-server-ryan-smith.database.windows.net'
 DATABASE = 'iot-telemetry-db'
 USER     = 'sqladmin'
-PASSWORD = 'cEgjuz-jetsod-5xybpa'   # ← fill in
+PASSWORD = ''   # ← fill in
 
 DATE_START = '2026-05-21 00:00:00'
 DATE_END   = '2026-05-27 00:00:00'
