@@ -34,4 +34,4 @@ venv/
 
 # Environment / secrets
 .env
-.env.*
+.env.*pythonFigures/two_day_csvs/sound_bins_combined.csv
