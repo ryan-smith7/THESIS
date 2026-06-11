@@ -6,10 +6,9 @@
 
 LOG_MODULE_REGISTER(AS7343, CONFIG_SENSOR_LOG_LEVEL);
 
-/* -------------------------------------------------------------------------- */
-/* Wavelength mapping (nm) per channel index                                  */
-/* 999 = VIS clear channel (intentional sentinel, used by application layer)  */
-/* 0   = flicker detect channel (excluded from all calculations)              */
+/* Wavelength mapping (nm) per channel index  */
+/* 999 = VIS clear channel (intentional sentinel, used by application layer)*/
+/* 0   = flicker detect channel (excluded from all calculations)*/
 
 static const uint16_t wavelength_map[18] = {
     450,  // DATA0  = FZ
@@ -38,9 +37,8 @@ static const uint8_t as7343_data_lsb[18] = {
     0xAD, 0xAF, 0xB1, 0xB3, 0xB5, 0xB7
 };
 
-/* -------------------------------------------------------------------------- */
-/* Gain table — ratios from datasheet Fig.10 relative to 64x.                 */
-/* 0.5x-16x divided by 1000 per datasheet note (5).                           */
+/* Gain table — ratios from datasheet Fig.10 relative to 64x.*/
+/* 0.5x-16x divided by 1000 per datasheet note (5). */
 
 static const uint8_t gain_reg[AS7343_GAIN_STEPS] = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
@@ -52,9 +50,8 @@ static const float gain_ratio[AS7343_GAIN_STEPS] = {
     0.5f,    1.0f,    2.0f,    4.1f,   8.6f,   16.9f
 };
 
-/* -------------------------------------------------------------------------- */
-/* Gain non-linearity correction factors                                       */
-/* Source: AN001052 Fig.5, normalised to 128x = 1.0                           */
+/* Gain non-linearity correction factors*/
+/* Source: AN001052 Fig.5, normalised to 128x = 1.0 */
 
 static const float gain_correction[AS7343_GAIN_STEPS] = {
     1.02f,  /* 0.5x  */
@@ -71,10 +68,9 @@ static const float gain_correction[AS7343_GAIN_STEPS] = {
     1.02f,  /* 1024x */
 };
 
-/* -------------------------------------------------------------------------- */
-/* Per-channel spectral correction factors                                     */
-/* Source: AN001052 Fig.19, Golden Device vs spectrometer.                    */
-/* Index: DATA0..DATA17 order. 0.0 = non-spectral, not applied.               */
+/* Per-channel spectral correction factors*/
+/* Source: AN001052 Fig.19, Golden Device vs spectrometer.*/
+/* Index: DATA0..DATA17 order. 0.0 = non-spectral, not applied.*/
 
 static const float ch_correction[18] = {
     1.0296f,  /* DATA0  FZ  450nm  */
@@ -97,9 +93,8 @@ static const float ch_correction[18] = {
     0.0f,     /* DATA17 flicker    */
 };
 
-/* -------------------------------------------------------------------------- */
-/* Datasheet Fig.8 R_typ values                                               */
-/* AGAIN=1024x, t_int=27.8ms, Ee=155 mW/m²                                   */
+/* Datasheet Fig.8 R_typ values*/
+/* AGAIN=1024x, t_int=27.8ms, Ee=155 mW/m²*/
 
 static const float r_typ[18] = {
     2169.0f, 3747.0f, 4776.0f, 10581.0f, 0.0f, 0.0f,
@@ -107,8 +102,7 @@ static const float r_typ[18] = {
     5749.0f, 5435.0f,  864.0f,  1574.0f, 0.0f, 0.0f
 };
 
-/* -------------------------------------------------------------------------- */
-/* Configuration                                                               */
+/* Configuration*/
 
 #define ATIME_VAL       63
 #define ASTEP_LSB       0xFF
@@ -124,16 +118,22 @@ static const float r_typ[18] = {
 #define R_TYP_VIS    999.0f
 #define DARK_SAMPLES 10
 
-static inline float as7343_tint_ms(void)
-{
+/**
+ * @brief Compute integration time in milliseconds from ATIME and ASTEP.
+ *
+ * Formula: (ATIME+1) * (ASTEP+1) * 2.78 µs, converted to ms.
+ */
+static inline float as7343_tint_ms(void) {
+
     return (float)(ATIME_VAL + 1) * (float)(1023 + 1) * 2.78f / 1000.0f;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Wait for AVALID                                                             */
-
-static int as7343_wait_ready(const struct device *dev)
-{
+/**
+ * @brief Poll until AVALID is set, with a 2s timeout.
+ *
+ * @return 0 when data is ready, -ETIMEDOUT if AVALID never asserts.
+ */
+static int as7343_wait_ready(const struct device *dev) {
     const struct as7343_config *cfg = dev->config;
     uint8_t st2;
     for (int i = 0; i < 400; i++) {
@@ -146,11 +146,13 @@ static int as7343_wait_ready(const struct device *dev)
     return -ETIMEDOUT;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Set AGAIN                                                                   */
-
-static int as7343_set_again(const struct device *dev, uint8_t idx)
-{
+/**
+ * @brief Write a new AGAIN gain index to the AGAIN register.
+ *
+ * @param idx  Gain step index (0=0.5x … 11=1024x).
+ * @return     0 on success, -EINVAL if idx is out of range.
+ */
+static int as7343_set_again(const struct device *dev, uint8_t idx) {
     const struct as7343_config *cfg = dev->config;
     struct as7343_data *data = dev->data;
     if (idx >= AS7343_GAIN_STEPS) return -EINVAL;
@@ -159,12 +161,16 @@ static int as7343_set_again(const struct device *dev, uint8_t idx)
     if (ret == 0) data->again_idx = idx;
     return ret;
 }
+/**
+ * @brief Flush 3 integration cycles then read all 18 raw ADC channels.
+ *
+ * The 3-cycle flush discards stale data held in the ADC pipeline before
+ * a gain change. Channel data and wavelength map are written to dev->data.
+ *
+ * @return 0 on success, negative errno on I2C or timeout failure.
+ */
+static int as7343_read_raw(const struct device *dev) {
 
-/* -------------------------------------------------------------------------- */
-/* Raw register read — 3 cycle flush then read all 18 channels               */
-
-static int as7343_read_raw(const struct device *dev)
-{
     const struct as7343_config *cfg = dev->config;
     struct as7343_data *data = dev->data;
     int ret;
@@ -186,13 +192,16 @@ static int as7343_read_raw(const struct device *dev)
     return 0;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Dark offset calibration                                                     */
-/* Call once at startup with sensor fully covered (no light incident).        */
-/* Computes BasicCounts offset per channel — remains valid across gain steps. */
-
-int as7343_calibrate_dark(const struct device *dev)
-{
+/**
+ * @brief Average DARK_SAMPLES raw reads to compute a BasicCounts dark offset
+ * per channel. Sets dark_calibrated = true on completion.
+ *
+ * Must be called once at startup with the sensor fully covered.
+ * The offset is gain-independent and remains valid across auto-ranger steps.
+ *
+ * @return 0 on success, negative errno on I2C or timeout failure.
+ */
+int as7343_calibrate_dark(const struct device *dev) {
     struct as7343_data *data = dev->data;
     int ret;
     float accum[18] = {0};
@@ -216,30 +225,19 @@ int as7343_calibrate_dark(const struct device *dev)
     return 0;
 }
 
-/* -------------------------------------------------------------------------- */
-/* S_i_basic — per-channel sensitivity in BasicCounts per mW/m²              */
-/*                                                                             */
-/* r_typ[i] is the raw ADC count from datasheet Fig.8 at:                    */
-/*   AGAIN=1024x (REF_RATIO=16.9), t_int=27.8ms (REF_TINT_MS), Ee=155mW/m²  */
-/*                                                                             */
-/* To express r_typ as a BasicCount (gain and time normalised):               */
-/*   r_typ_basic[i] = r_typ[i] / (REF_RATIO * REF_TINT_MS)                  */
-/*                                                                             */
-/* S_i_basic = r_typ_basic[i] / REF_EE                                       */
-/*           = r_typ[i] / (REF_EE * REF_RATIO * REF_TINT_MS)                */
-/*           units: BasicCounts / (mW/m²)                                    */
-/*                                                                             */
-/* Dimensional proof that E_i = BC_corr / S_i_basic is consistent:           */
-/*   BC_corr  has units: counts / (gain_ratio * tint_ms)  [BasicCounts]      */
-/*   S_i_basic has units: BasicCounts / (mW/m²)                              */
-/*   BC_corr / S_i_basic = mW/m²  ✓                                          */
-/*                                                                             */
-/* Both numerator (your measurement) and denominator (datasheet reference)    */
-/* are in the same BasicCounts space — gain and tint fully cancel.            */
-/*                                                                             */
-/* Precomputed at compile time: s_i_basic[i] = r_typ[i] / (155 * 16.9 * 27.8) */
-/* REF_EE * REF_RATIO * REF_TINT_MS = 155 * 16.9 * 27.8 = 72765.1           */
-
+/*
+ * s_i_basic[] — per-channel sensitivity in BasicCounts / (mW/m²)
+ *
+ * Derived from datasheet Fig.8 r_typ values measured at a known reference
+ * condition (AGAIN=1024x, t_int=27.8 ms, Ee=155 mW/m²):
+ *
+ *   s_i_basic[i] = r_typ[i] / (REF_EE × REF_RATIO × REF_TINT_MS)
+ *                = r_typ[i] / 72765.1
+ *
+ * Dividing a measured BasicCounts value by s_i_basic[i] yields irradiance
+ * in mW/m². Gain and integration time cancel because both the measurement
+ * and the datasheet reference are expressed in the same BasicCounts space.
+ */
 #define S_DENOM  (REF_EE * REF_RATIO * REF_TINT_MS)   /* 72765.1 */
 
 static const float s_i_basic[18] = {
@@ -266,28 +264,21 @@ static const float s_i_basic[18] = {
 /* VIS channel S_i_basic — Fig.9 R_typ=999, same reference conditions */
 static const float s_vis_basic = R_TYP_VIS / S_DENOM;  /* = 0.01373 BC/(mW/m²) */
 
-/* -------------------------------------------------------------------------- */
-/* Calibration chain: raw counts → corrected irradiance (mW/m²)              */
-/*                                                                             */
-/* Step 1  BasicCounts  = raw / (gain_ratio * tint_ms)                        */
-/*         Removes AGAIN and t_int dependency. Consistent across gain steps.  */
-/*                                                                             */
-/* Step 2  BC_offset    = BasicCounts - dark_basic[i]                         */
-/*         Removes dark current, DC bias, ambient leakage floor.              */
-/*                                                                             */
-/* Step 3  BC_gain      = BC_offset * gain_correction[again_idx]              */
-/*         Corrects ADC gain non-linearity (AN001052 Fig.5, <1% for <=512x).  */
-/*                                                                             */
-/* Step 4  BC_corr      = BC_gain * ch_correction[i]                          */
-/*         Per-channel spectral correction from Golden Device (AN001052 Fig.19)*/
-/*         Partially corrects out-of-band filter leakage, notably F8/745nm.  */
-/*                                                                             */
-/* Step 5  E_i [mW/m²]  = BC_corr / s_i_basic[i]                             */
-/*         s_i_basic[i] = r_typ[i] / (REF_EE * REF_RATIO * REF_TINT_MS)     */
-/*         Converts BasicCounts to irradiance — units cancel correctly.       */
-
-static void as7343_compute_irradiance(struct as7343_data *data)
-{
+/**
+ * @brief Convert raw ADC counts to calibrated irradiance (mW/m²).
+ *
+ * Applies the full 5-step calibration chain to all 18 channels:
+ *   1. BasicCounts  = raw / (gain_ratio × tint_ms)
+ *   2. Dark offset subtraction (if dark_calibrated)
+ *   3. Gain non-linearity correction (AN001052 Fig.5)
+ *   4. Per-channel spectral correction (AN001052 Fig.19)
+ *   5. Irradiance conversion via s_i_basic sensitivity (datasheet Fig.8)
+ *
+ * VIS broadband (DATA4/10/16) is averaged across the three clear channels
+ * and converted via s_vis_basic (datasheet Fig.9). Flicker channels are
+ * zeroed. Results written to data->irradiance_mW[] and data->vis_irradiance_mW.
+ */
+static void as7343_compute_irradiance(struct as7343_data *data) {
     float gr = gain_ratio[data->again_idx];
     float ti = as7343_tint_ms();
     float gc = gain_correction[data->again_idx];
@@ -305,7 +296,9 @@ static void as7343_compute_irradiance(struct as7343_data *data)
         /* Step 2: subtract dark offset BasicCounts */
         if (data->dark_calibrated) {
             bc -= data->dark_basic[i];
-            if (bc < 0.0f) bc = 0.0f;
+            if (bc < 0.0f) {
+                bc = 0.0f;
+            }
         }
 
         /* Step 3: gain non-linearity correction */
@@ -323,39 +316,45 @@ static void as7343_compute_irradiance(struct as7343_data *data)
     }
 
     /* VIS broadband (DATA4/10/16) — Steps 1-3 only, s_vis_basic from Fig.9  */
-    {
-        float vis_sum = 0.0f;
-        const int vis_idx[3] = {4, 10, 16};
-        for (int j = 0; j < 3; j++) {
-            float bc = (float)data->channel_data[vis_idx[j]] / (gr * ti);
-            if (data->dark_calibrated) {
-                bc -= data->dark_basic[vis_idx[j]];
-                if (bc < 0.0f) bc = 0.0f;
+    float vis_sum = 0.0f;
+    const int vis_idx[3] = {4, 10, 16};
+    for (int j = 0; j < 3; j++) {
+        float bc = (float)data->channel_data[vis_idx[j]] / (gr * ti);
+        if (data->dark_calibrated) {
+            bc -= data->dark_basic[vis_idx[j]];
+            if (bc < 0.0f) {
+                bc = 0.0f;
             }
-            bc *= gc;
-            vis_sum += bc;
         }
-        data->vis_irradiance_mW = (vis_sum / 3.0f) / s_vis_basic;
-        // data->vis_irradiance_mW = (vis_sum / 3.0f);
-        data->irradiance_mW[4]  = data->vis_irradiance_mW;
-        data->irradiance_mW[10] = data->vis_irradiance_mW;
-        data->irradiance_mW[16] = data->vis_irradiance_mW;
+        bc *= gc;
+        vis_sum += bc;
     }
+    data->vis_irradiance_mW = (vis_sum / 3.0f) / s_vis_basic;
+    // data->vis_irradiance_mW = (vis_sum / 3.0f);
+    data->irradiance_mW[4]  = data->vis_irradiance_mW;
+    data->irradiance_mW[10] = data->vis_irradiance_mW;
+    data->irradiance_mW[16] = data->vis_irradiance_mW;
 }
 
-/* -------------------------------------------------------------------------- */
-/* sample_fetch                                                                */
-
+/**
+ * @brief Zephyr sensor API: fetch a sample with automatic gain ranging.
+ *
+ * Reads raw counts and adjusts AGAIN up or down if the peak spectral
+ * channel is outside [CLIP_LO, CLIP_HI]. Retries up to AS7343_GAIN_STEPS
+ * times before returning -ETIMEDOUT. On a good reading, calls
+ * as7343_compute_irradiance() to populate irradiance_mW[].
+ */
 static int as7343_sample_fetch(const struct device *dev,
-                               enum sensor_channel chan)
-{
+                               enum sensor_channel chan) {
     ARG_UNUSED(chan);
     struct as7343_data *data = dev->data;
     int ret;
 
     for (int attempt = 0; attempt < AS7343_GAIN_STEPS; attempt++) {
         ret = as7343_read_raw(dev);
-        if (ret < 0) return ret;
+        if (ret < 0) {
+            return ret;
+        }
 
         uint16_t peak = 0;
         for (int i = 0; i < 18; i++) {
@@ -367,14 +366,18 @@ static int as7343_sample_fetch(const struct device *dev,
             LOG_INF("AS7343: peak=%u clipping, gain %u -> %u",
                     peak, data->again_idx, data->again_idx - 1);
             ret = as7343_set_again(dev, data->again_idx - 1);
-            if (ret < 0) return ret;
+            if (ret < 0) {
+                return ret;
+            }
             continue;
         }
         if (peak < CLIP_LO && data->again_idx < AS7343_GAIN_STEPS - 1) {
             LOG_INF("AS7343: peak=%u too low, gain %u -> %u",
                     peak, data->again_idx, data->again_idx + 1);
             ret = as7343_set_again(dev, data->again_idx + 1);
-            if (ret < 0) return ret;
+            if (ret < 0) {
+                return ret;
+            }
             continue;
         }
 
@@ -386,15 +389,17 @@ static int as7343_sample_fetch(const struct device *dev,
     return -ETIMEDOUT;
 }
 
-/* -------------------------------------------------------------------------- */
-/* channel_get                                                                 */
-/* val->val1 = wavelength nm                                                  */
-/* val->val2 = irradiance in µW/m² (mW/m² * 1000, int32)                    */
-
+/**
+ * @brief Zephyr sensor API: return wavelength and irradiance for a channel.
+ *
+ * val->val1 = wavelength in nm (0=flicker, 999=VIS broadband).
+ * val->val2 = irradiance in µW/m² (mW/m² × 1000, as int32).
+ *
+ * @return 0 on success, -ENOTSUP for unsupported channels.
+ */
 static int as7343_channel_get(const struct device *dev,
                               enum sensor_channel chan,
-                              struct sensor_value *val)
-{
+                              struct sensor_value *val) {
     struct as7343_data *data = dev->data;
     if (chan >= SENSOR_CHAN_PRIV_START) {
         int idx = chan - SENSOR_CHAN_PRIV_START;
@@ -412,15 +417,21 @@ static const struct sensor_driver_api as7343_driver_api = {
     .channel_get  = as7343_channel_get,
 };
 
-/* -------------------------------------------------------------------------- */
-/* Spectrum helper                                                             */
-
+/**
+ * @brief Fetch a spectrum and fill a caller-supplied point array.
+ *
+ * Calls sample_fetch then copies wavelength_nm and irradiance (clamped
+ * to uint16) into spectrum[0..AS7343_NUM_CHANNELS-1].
+ *
+ * @return 0 on success, negative errno on fetch failure.
+ */
 int as7343_get_spectrum(const struct device *dev,
-                        struct as7343_point spectrum[AS7343_NUM_CHANNELS])
-{
+                        struct as7343_point spectrum[AS7343_NUM_CHANNELS]) {
     struct as7343_data *data = dev->data;
     int ret = as7343_sample_fetch(dev, SENSOR_CHAN_ALL);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     for (int i = 0; i < AS7343_NUM_CHANNELS; i++) {
         spectrum[i].wavelength_nm = data->wavelengths[i];
         spectrum[i].value = (uint16_t)CLAMP(
@@ -429,11 +440,15 @@ int as7343_get_spectrum(const struct device *dev,
     return 0;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Init                                                                        */
-
-static int as7343_init(const struct device *dev)
-{
+/**
+ * @brief Initialise the AS7343 — configure ATIME, ASTEP, AGAIN, and CFG20,
+ * enable spectral measurement, and log a reminder to call
+ * as7343_calibrate_dark() before the first sample.
+ *
+ * @return 0 on success, -ENODEV if the I2C bus is not ready, or a
+ *         negative errno on any register write failure.
+ */
+static int as7343_init(const struct device *dev) {
     const struct as7343_config *cfg = dev->config;
     struct as7343_data *data = dev->data;
     int ret;
@@ -447,37 +462,52 @@ static int as7343_init(const struct device *dev)
     data->dark_calibrated = false;
 
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x80, 0x01);
-    if (ret < 0) return ret;
-
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x81, ATIME_VAL);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xD4, ASTEP_LSB);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xD5, ASTEP_MSB);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xC6,
                              gain_reg[GAIN_START_IDX]);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xBF, 0x01);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xD6, 0x60);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0xBF, 0x00);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x80, 0x11);
     k_msleep(5);
 
     ret = i2c_reg_write_byte(cfg->i2c.bus, cfg->i2c.addr, 0x80, 0x03);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        return ret;
+    }
 
     LOG_INF("AS7343 init OK — call as7343_calibrate_dark() with sensor covered");
     return 0;
 }
-
-/* -------------------------------------------------------------------------- */
 
 #define AS7343_DEFINE(inst)                                            \
     static struct as7343_data as7343_data_##inst;                      \

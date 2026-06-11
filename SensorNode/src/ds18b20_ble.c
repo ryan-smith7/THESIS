@@ -41,15 +41,15 @@ MODALITY_CCC_CHANGED(ds18b20, ds18b20_notify_enabled, ds18b20_notify_sem);
 MODALITY_READ_HANDLER(ds18b20, ds18b20_buf, DS18B20_BUF_LEN);
 MODALITY_GATT_SERVICE(ds18b20, DS18B20_SVC_UUID_BYTES, DS18B20_CHR_UUID_BYTES);
 
-static void ds18b20_connected(struct bt_conn *conn, uint8_t err)
-{
+static void ds18b20_connected(struct bt_conn *conn, uint8_t err) {
+
     if (!err) {
         ds18b20_conn = bt_conn_ref(conn);
     }
 }
 
-static void ds18b20_disconnected(struct bt_conn *conn, uint8_t reason)
-{
+static void ds18b20_disconnected(struct bt_conn *conn, uint8_t reason) {
+
     if (ds18b20_conn) {
         bt_conn_unref(ds18b20_conn);
         ds18b20_conn = NULL;
@@ -64,8 +64,8 @@ static struct bt_conn_cb ds18b20_conn_cb = {
     .disconnected = ds18b20_disconnected,
 };
 
-bool ds18b20_pack_and_notify(const struct ds18b20_msg *msg)
-{
+bool ds18b20_pack_and_notify(const struct ds18b20_msg *msg) {
+
     struct bt_conn *conn = ds18b20_conn;
     if (!conn || !ds18b20_notify_enabled) {
         return false;
@@ -92,8 +92,7 @@ bool ds18b20_pack_and_notify(const struct ds18b20_msg *msg)
     return true;
 }
 
-void ds18b20_ble_thread(void)
-{
+void ds18b20_ble_thread(void) {
     bt_conn_cb_register(&ds18b20_conn_cb);
     LOG_INF("ds18b20_ble thread ready");
 

@@ -11,15 +11,6 @@
  * - Baud rate switched between 9600 (reset) and 115200 (data)
  * - Explicit TX completion wait before baud switch
  * - Explicit RX FIFO flush before each transaction
- *
- * Wiring:
- *   GPIO14 (TX) ──|BAT46|──┬── DS18B20 S pin (DQ)
- *   GPIO16 (RX) ───────────┘
- *   3.3V ──── 4.7kΩ ────── DQ
- *   GND  ──── DS18B20 GND
- *   3.3V ──── DS18B20 VCC
- *
- * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <zephyr/kernel.h>
@@ -81,17 +72,15 @@ static struct uart_config w1_uart_cfg = {
 
 static void w1_flush_rx(void);
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * Low-level UART helpers
- * ═══════════════════════════════════════════════════════════════════════════ */
+/*-------------Low-level UART helpers-------------*/
 
 /**
  * @brief Set UART baud rate and settle.
  *        Re-applies GPIO matrix routing after every uart_configure call
  *        because uart_esp32_configure resets the GPIO matrix state.
  */
-static int w1_set_baud(uint32_t baud)
-{
+static int w1_set_baud(uint32_t baud) {
+
     w1_uart_cfg.baudrate = baud;
     int ret = uart_configure(w1_uart, &w1_uart_cfg);
     if (ret != 0) {
@@ -115,8 +104,8 @@ static int w1_set_baud(uint32_t baud)
 /**
  * @brief Flush any stale bytes from the UART RX FIFO.
  */
-static void w1_flush_rx(void)
-{
+static void w1_flush_rx(void) {
+
     uint8_t dummy;
     while (uart_poll_in(w1_uart, &dummy) == 0) {
         /* discard */
@@ -135,8 +124,7 @@ static void w1_flush_rx(void)
  * @return 0 on success, -EIO on timeout
  */
 static int w1_tx_rx(uint8_t tx_byte, uint8_t *rx_byte,
-                    uint32_t tx_wait, uint32_t rx_timeout)
-{
+                    uint32_t tx_wait, uint32_t rx_timeout) {
     w1_flush_rx();
 
     uart_poll_out(w1_uart, tx_byte);
@@ -159,9 +147,7 @@ static int w1_tx_rx(uint8_t tx_byte, uint8_t *rx_byte,
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 1-Wire protocol primitives
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ---------------1-Wire protocol primitives---------------*/
 
 /**
  * @brief Issue a 1-Wire reset pulse and detect presence.
@@ -173,8 +159,7 @@ static int w1_tx_rx(uint8_t tx_byte, uint8_t *rx_byte,
  *
  * @return true if device present, false if no device or bus error
  */
-static bool w1_reset(void)
-{
+static bool w1_reset(void) {
     uint8_t rx = 0;
 
     if (w1_set_baud(OW_BAUD_RESET) != 0) {
@@ -209,8 +194,8 @@ static bool w1_reset(void)
  * @brief Write one bit onto the 1-Wire bus.
  *        Must be called at 115200 baud.
  */
-static void w1_write_bit(bool bit)
-{
+static void w1_write_bit(bool bit) {
+
     uint8_t tx = bit ? OW_BIT_1 : OW_BIT_0;
     uint8_t rx = 0;
     w1_tx_rx(tx, &rx, OW_TX_WAIT_DATA_US, OW_RX_TIMEOUT_DATA_US);
@@ -224,8 +209,8 @@ static void w1_write_bit(bool bit)
  *
  * @return 1 or 0
  */
-static int w1_read_bit(void)
-{
+static int w1_read_bit(void) {
+
     uint8_t rx = 0;
     if (w1_tx_rx(OW_BIT_1, &rx,
                  OW_TX_WAIT_DATA_US, OW_RX_TIMEOUT_DATA_US) != 0) {
@@ -237,8 +222,8 @@ static int w1_read_bit(void)
 /**
  * @brief Write one byte onto the 1-Wire bus, LSB first.
  */
-static void w1_write_byte(uint8_t byte)
-{
+static void w1_write_byte(uint8_t byte) {
+
     for (int i = 0; i < 8; i++) {
         w1_write_bit((byte >> i) & 0x01);
     }
@@ -247,8 +232,8 @@ static void w1_write_byte(uint8_t byte)
 /**
  * @brief Read one byte from the 1-Wire bus, LSB first.
  */
-static uint8_t w1_read_byte(void)
-{
+static uint8_t w1_read_byte(void) {
+
     uint8_t byte = 0;
     for (int i = 0; i < 8; i++) {
         if (w1_read_bit()) {
@@ -258,15 +243,12 @@ static uint8_t w1_read_byte(void)
     return byte;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * CRC
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* -------------CRC-----------*/
 
 /**
  * @brief Dallas/Maxim 1-Wire CRC8 (polynomial x^8 + x^5 + x^4 + 1).
  */
-static uint8_t w1_crc8(const uint8_t *data, size_t len)
-{
+static uint8_t w1_crc8(const uint8_t *data, size_t len) {
     uint8_t crc = 0;
     for (size_t i = 0; i < len; i++) {
         crc ^= data[i];
@@ -281,18 +263,13 @@ static uint8_t w1_crc8(const uint8_t *data, size_t len)
     return crc;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * DS18B20 public API
- * ═══════════════════════════════════════════════════════════════════════════ */
-
 /**
  * @brief Initialise the DS18B20 driver.
  *        Call once at startup before ds18b20_read_temp().
  *
  * @return 0 on success, negative errno on failure
  */
-int ds18b20_direct_init(void)
-{
+int ds18b20_direct_init(void) {
     w1_uart = DEVICE_DT_GET(W1_UART_NODE);
     if (!device_is_ready(w1_uart)) {
         LOG_ERR("UART2 not ready");
@@ -320,21 +297,20 @@ int ds18b20_direct_init(void)
  *         -ENODEV  no device on bus
  *         -EIO     CRC error or bus error
  */
-int ds18b20_direct_read(float *temp_c)
-{
+int ds18b20_direct_read(float *temp_c) {
     uint8_t scratchpad[DS18B20_SCRATCHPAD_BYTES];
 
-    /* ── Step 1: Reset + Skip ROM + Convert T ───────────────────────── */
+    /* ── Reset + Skip ROM + Convert T ───────────────────────── */
     if (!w1_reset()) {
         return -ENODEV;
     }
     w1_write_byte(DS18B20_CMD_SKIP_ROM);
     w1_write_byte(DS18B20_CMD_CONVERT_T);
 
-    /* ── Step 2: Wait for 12-bit conversion (750ms) ─────────────────── */
+    /* ── Wait for 12-bit conversion (750ms) ─────────────────── */
     k_sleep(K_MSEC(DS18B20_RESOLUTION_12BIT_MS));
 
-    /* ── Step 3: Reset + Skip ROM + Read Scratchpad ─────────────────── */
+    /* ──Reset + Skip ROM + Read Scratchpad ─────────────────── */
     if (!w1_reset()) {
         return -ENODEV;
     }
@@ -345,7 +321,7 @@ int ds18b20_direct_read(float *temp_c)
         scratchpad[i] = w1_read_byte();
     }
 
-    /* ── Step 4: CRC check ───────────────────────────────────────────── */
+    /* ── CRC check ───────────────────────────────────────────── */
     uint8_t crc_calc = w1_crc8(scratchpad, DS18B20_SCRATCHPAD_BYTES - 1);
     if (crc_calc != scratchpad[DS18B20_SCRATCHPAD_BYTES - 1]) {
         LOG_ERR("CRC mismatch: calc=0x%02x got=0x%02x",
@@ -353,7 +329,7 @@ int ds18b20_direct_read(float *temp_c)
         return -EIO;
     }
 
-    /* ── Step 5: Parse temperature ───────────────────────────────────── */
+    /* ── Parse temperature ───────────────────────────────────── */
     /* Scratchpad bytes 0-1 are the 16-bit raw temperature, LSB first.
      * DS18B20 12-bit resolution: LSB = 0.0625°C */
     int16_t raw = (int16_t)((scratchpad[1] << 8) | scratchpad[0]);
@@ -363,10 +339,6 @@ int ds18b20_direct_read(float *temp_c)
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * Optional: sensor_value output (matches Zephyr sensor API convention)
- * ═══════════════════════════════════════════════════════════════════════════ */
-
 /**
  * @brief Read temperature into a Zephyr sensor_value struct.
  *        val1 = integer degrees C, val2 = fractional part in millionths.
@@ -374,8 +346,7 @@ int ds18b20_direct_read(float *temp_c)
  * @param val  Pointer to sensor_value to populate
  * @return 0 on success, negative errno on failure
  */
-int ds18b20_direct_read_sensor_value(struct sensor_value *val)
-{
+int ds18b20_direct_read_sensor_value(struct sensor_value *val) {
     float temp;
     int ret = ds18b20_direct_read(&temp);
     if (ret != 0) {

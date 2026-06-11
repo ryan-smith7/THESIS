@@ -1,10 +1,8 @@
-/* ═══════════════════════════════════════════════════════════════════════════
- * current_thread.c — with dummy implementation
+/* current_thread.c — with dummy implementation
  *
  * Replace dummy_read_current_uA() and dummy_read_voltage_mV()
  * with their actual reads. Everything else
  * (queue, thread structure) stays identical
- * ═══════════════════════════════════════════════════════════════════════════
  */
  
 #include <zephyr/kernel.h>

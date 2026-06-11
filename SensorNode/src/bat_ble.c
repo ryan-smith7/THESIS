@@ -43,13 +43,20 @@ MODALITY_CCC_CHANGED_NOSEM(bat, bat_notify_enabled);
 MODALITY_READ_HANDLER(bat, bat_buf, BAT_BUF_LEN);
 MODALITY_GATT_SERVICE(bat, BAT_SVC_UUID_BYTES, BAT_CHR_UUID_BYTES);
 
-static void bat_connected(struct bt_conn *conn, uint8_t err){
+/**
+ * @brief Connection callback — stores a referenced conn handle.
+ */
+static void bat_connected(struct bt_conn *conn, uint8_t err) {
 
     if (!err) {
         bat_conn = bt_conn_ref(conn);
     }
 }
 
+/**
+ * @brief Disconnection callback — releases the conn handle and clears
+ * notify state.
+ */
 static void bat_disconnected(struct bt_conn *conn, uint8_t reason) {
 
     if (bat_conn) {
@@ -64,6 +71,15 @@ static struct bt_conn_cb bat_conn_cb = {
     .disconnected = bat_disconnected,
 };
 
+/**
+ * @brief Pack a battery message into the BLE buffer and notify the gateway.
+ *
+ * Encodes utc_sec (4), utc_ms (2), mV (2), pct (1), rate_x10 (2), and
+ * dev_id (1) into bat_buf as big-endian, then sends a GATT notification.
+ * No-op if not connected or notifications are not enabled.
+ *
+ * @param msg  Battery message to encode.
+ */
 void bat_pack_and_notify(const struct batt_msg *msg) {
 
     struct bt_conn *conn = bat_conn;
@@ -88,6 +104,10 @@ void bat_pack_and_notify(const struct batt_msg *msg) {
     MODALITY_NOTIFY(bat, conn, bat_notify_enabled, bat_buf, BAT_BUF_LEN);
 }
 
+/**
+ * @brief Battery BLE thread — dequeues messages from batt_q and notifies
+ * the gateway if connected. Battery data is live-only; no SD logging.
+ */
 void bat_ble_thread(void) {
  
     bt_conn_cb_register(&bat_conn_cb);
@@ -102,6 +122,5 @@ void bat_ble_thread(void) {
         if (bat_notify_enabled && bat_conn) {
             bat_pack_and_notify(&msg);
         }
-        /* Battery is live-only — not logged to SD */
     }
 }

@@ -401,3 +401,8 @@ label.dropzone.over {
   max-width: 680px;
   width: 100%;
 }
+
+
+.dropzone * {
+  pointer-events: none;
+}

@@ -109,7 +109,7 @@ const MODALITIES = {
       return buildCsvSafe(
         'datetime,utc_sec,utc_ms,uptime_ms,temp_c,rh_pct,press_hPa',
         rows,
-        x => [fmtDt(x.s, x.ms), x.s, x.ms, x.uptime_ms, x.temp.toFixed(2), x.rh.toFixed(2), x.press.toFixed(3)].join(',')
+        x => [fmtDt(x.s, x.ms), x.s, x.ms, x.uptime_ms, x.temp.toFixed(2), x.rh.toFixed(2), (x.press * 10).toFixed(3)].join(',')
       );
     },
     toSql(row, dev) { return { device_id: dev, datetime: fmtDt(row.s, row.ms), temp_c: parseFloat(row.temp.toFixed(2)), rh_pct: parseFloat(row.rh.toFixed(2)), press_hPa: parseFloat(row.press.toFixed(3)) }; },

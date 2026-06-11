@@ -15,6 +15,9 @@
 #include "time_sync.h"
 #include "sd_log.h"
 
+#include <zephyr/sys/poweroff.h>
+#include <esp_sleep.h>
+
 #ifndef CONFIG_BT_DEVICE_NAME
 #define CONFIG_BT_DEVICE_NAME "SensorNode"
 #endif
@@ -158,8 +161,7 @@ static ssize_t pack_data(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 static ssize_t write_handler(struct bt_conn *conn,
                              const struct bt_gatt_attr *attr,
                              const void *buf, uint16_t len,
-                             uint16_t offset, uint8_t flags)
-{
+                             uint16_t offset, uint8_t flags) {
     if (time_sync_handle_write(buf, len)) {
         return len;
     }
@@ -217,9 +219,9 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 #endif
 }
 
-/*
- * On disconnect, unreference the connection and give semaphore to restart advertising so
- * the gateway can reconnect
+/**
+ * @brief Disconnection callback — unreferences the conn, resets notify state,
+ * and signals adv_restart_sem to restart advertising.
  */
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
 
@@ -236,6 +238,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     k_sem_give(&adv_restart_sem);
 }
 
+/**
+ * @brief Start advertising, retrying every 1 s until successful.
+ *
+ * @param after_disconnect  If true, waits 500 ms before the first attempt
+ *                          to allow the BLE stack to settle post-disconnect.
+ */
 static void start_advertising_with_retry(bool after_disconnect) {
 
     if (after_disconnect) {
@@ -348,14 +356,11 @@ extern int stop_advertising_and_disconnect() {
     return 0;
 }
 
-#include <zephyr/sys/poweroff.h>
-#include <esp_sleep.h>
-/*
+/**
+ * @brief Sensor node BLE thread — initialises Bluetooth, starts advertising,
+ * then blocks waiting for adv_restart_sem on each disconnect.
  *
- * Initialise BT, start advertising once, then block forever.
- * All reconnection logic lives in disconnected() above
- *
- * Modality BLE threads handle all data flow
+ * All data flow is handled by the modality BLE threads.
  */
 void sensornode_thread(void) {
 

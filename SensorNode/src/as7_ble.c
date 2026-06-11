@@ -40,11 +40,19 @@ MODALITY_CCC_CHANGED(as7, as7_notify_enabled, as7_notify_sem);
 MODALITY_READ_HANDLER(as7, as7_buf, AS7_BUF_LEN);
 MODALITY_GATT_SERVICE(as7, AS7_SVC_UUID_BYTES, AS7_CHR_UUID_BYTES);
 
-static void as7_connected(struct bt_conn *conn, uint8_t err)
-{
-    if (!err) as7_conn = bt_conn_ref(conn);
+/**
+ * @brief Connection callback — stores a referenced conn handle.
+ */
+static void as7_connected(struct bt_conn *conn, uint8_t err) {
+    if (!err) {
+        as7_conn = bt_conn_ref(conn);
+    }
 }
 
+/**
+ * @brief Disconnection callback — releases the conn handle and resets
+ * notify state.
+ */
 static void as7_disconnected(struct bt_conn *conn, uint8_t reason) {
 
     if (as7_conn) {
@@ -61,21 +69,17 @@ static struct bt_conn_cb as7_conn_cb = {
     .disconnected = as7_disconnected,
 };
 
-/* -------------------------------------------------------------------------- */
-/* BLE pack and notify                                                         */
-/*                                                                             */
-/* Payload layout (59 bytes total):                                            */
-/*   [0-3]   utc_sec     big-endian uint32                                    */
-/*   [4-5]   utc_ms      big-endian uint16                                    */
-/*   [6-57]  ch[0..12]   big-endian uint32 each  (13 × 4 = 52 bytes)         */
-/*   [58]    dev_id                                                            */
-/*                                                                             */
-/* ch[] changed from uint16 (2 bytes) to uint32 (4 bytes) to hold µW/m²      */
-/* values up to ~1,000,000 (1000 W/m²) without truncation.                   */
-/* Update AS7_BUF_LEN and gateway deserialiser offsets to match.              */
-/*                                                                             */
-/* Gateway: read each ch[i] as big-endian uint32 at offset 6 + i*4           */
-/* Convert to mW/m²: ch[i] / 1000.0                                           */
+/**
+ * @brief Pack an AS7343 message into the BLE buffer and notify the gateway.
+ *
+ * Encodes utc_sec (4 bytes), utc_ms (2 bytes), 13 spectral channels as
+ * big-endian uint32 (52 bytes), and dev_id (1 byte) into as7_buf, then
+ * sends a GATT notification.
+ *
+ * @param msg  Spectral message to encode.
+ * @return     true if notification was sent, false if not connected or
+ *             notifications not enabled.
+ */
  bool as7_pack_and_notify(const struct as7343_msg *msg) {
     struct bt_conn *conn = as7_conn;
     if (!conn || !as7_notify_enabled) {
@@ -107,6 +111,11 @@ static struct bt_conn_cb as7_conn_cb = {
     return true;
 }
 
+/**
+ * @brief AS7343 BLE thread — dequeues messages from as7_q and either
+ * notifies the gateway or logs to SD card depending on connection state
+ * and UTC validity.
+ */
 void as7_ble_thread(void) {
     bt_conn_cb_register(&as7_conn_cb);
     LOG_INF("as7_ble thread ready");
