@@ -1,48 +1,22 @@
 /**
  * @file sd_log.c
- * @brief SD card offline logging — binary format with dual-file targets.
+ * @brief SD card offline logging — binary records with CRC32, dual-file targets.
  *
- * Two write targets per modality, selected explicitly by the caller:
+ * Each modality writes to two files:
+ *   Boot archive  (e.g. /SD/BME0003.BIN) — every sample, never deleted.
+ *   UTC upload    (e.g. SD_LOG_BME280)   — UTC-valid records only; drained
+ *                                          over BLE on reconnect then deleted.
  *
- *   sd_log_X_boot()   Boot archive file (e.g. /SD/BME0003.BIN)
- *     Written on every sample.  Never deleted.  Contains both uptime_ms
- *     and utc_sec so pre-sync records can be retroactively aligned to UTC.
+ * Routing decisions live in the modality BLE threads, not here.
  *
- *   sd_log_X_utc()    UTC upload file (e.g. SD_LOG_BME280)
- *     Written only for UTC-valid records while offline (or always, if
- *     CONFIG_SD_LOG_ALWAYS_WRITE=y).  Replayed over BLE then deleted.
+ * On init: boot counter is incremented, boot-numbered paths are built, and
+ * all UTC upload files are tail-healed to remove any partial record left by
+ * a previous power-loss.
  *
- * All routing decisions live in bme_ble_thread (and peer threads):
- *
- *   Connected + subscribed + UTC valid  →  BLE notify + boot file
- *   Connected + subscribed, no UTC      →  boot file only
- *   Not connected, UTC valid            →  boot file + UTC upload file
- *   Not connected, no UTC              →  boot file only
- *   CONFIG_SD_LOG_ALWAYS_WRITE=y        →  boot file + UTC file always
- *
- * Boot counter is read from /SD/bootcount.txt at init, incremented, and
- * written back.  UTC upload files are tail-healed at init to remove any
- * partial record left by a previous power-loss mid-write.
- *
- * DRAIN DESIGN
- * ------------
- * Each drain function reads from the END of the UTC file (most recent first),
- * sends the record over BLE, then immediately truncates that record off the
- * end of the file. f_sync() after each truncate makes it durable — a power
- * cycle between sends leaves the file containing only unsent records.
- *
- * On disconnect mid-drain the file contains exactly the unsent records.
- * On reconnect drain resumes from the new end — no position tracking needed,
- * no re-sends, no duplicates.
- *
- * Most-recent-first ordering means the gateway receives the freshest data
- * immediately after reconnect, backfilling older records afterwards.
- *
- * RAM saving vs old static buffers:
- *   snd_drain_rows[32]: 712x32 = 22,784 bytes  ->  712 bytes on drain stack
- *   bme_drain_rows[32]:  40x32 =  1,280 bytes  ->   40 bytes on drain stack
- *   ens_drain_rows[32]:  32x32 =  1,024 bytes  ->   32 bytes on drain stack
- *   Total saved: ~25 KB static DRAM
+ * Drain: records are replayed most-recent-first by truncating from the end
+ * of the UTC file after each successful BLE notify. A power-cycle mid-drain
+ * leaves only unsent records in the file; resuming on reconnect requires no
+ * position tracking and produces no duplicates.
  */
 
 #include "sd_log.h"
@@ -53,10 +27,8 @@
 #include "mst_ble.h"
 #include "ds18b20_ble.h"
 
-// #if defined(CONFIG_SENSOR_NODE_1)
 #include "sound.h"
 #include "sound_ble.h"
-// #endif
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -71,17 +43,17 @@ LOG_MODULE_REGISTER(sd_log, LOG_LEVEL_INF);
 #define BOOT_PATH_MAX    24   /* e.g. "/SD/BME0003.BIN" = 16 chars, headroom */
 #define DRAIN_DELAY 30
 
-/* ── Drain semaphore — triggered by connected() callback ─────────────────── */
+/* ── Drain semaphore — triggered by connected() callback */
 K_SEM_DEFINE(sd_drain_sem, 0, 1);
 
-/* ── SD state ────────────────────────────────────────────────────────────── */
+/* ── SD state */
 static bool sd_ready    = false;
 static bool sd_draining = false;
 
-/* ── SD access mutex ─────────────────────────────────────────────────────── */
+/* ── SD access mutex */
 static K_MUTEX_DEFINE(sd_mutex);
 
-/* ── Boot-numbered archive file paths — built once at init ──────────────── */
+/* ── Boot-numbered archive file paths — built once at init */
 // #if defined(CONFIG_SENSOR_NODE_1)
 static char boot_bme[BOOT_PATH_MAX];
 static char boot_ens[BOOT_PATH_MAX];
@@ -92,25 +64,37 @@ static char boot_mst[BOOT_PATH_MAX];
 static char boot_ds18b20[BOOT_PATH_MAX];
 // #endif
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * PUBLIC STATE ACCESSORS
- * ═══════════════════════════════════════════════════════════════════════════ */
+// #if defined(CONFIG_SENSOR_NODE_1)
+const char *sd_log_boot_path_bme(void) { return boot_bme; }
+const char *sd_log_boot_path_ens(void) { return boot_ens; }
+const char *sd_log_boot_path_snd(void) { return boot_snd; }
+// #elif defined(CONFIG_SENSOR_NODE_2)
+const char *sd_log_boot_path_as7(void) { return boot_as7; }
+const char *sd_log_boot_path_mst(void) { return boot_mst; }
+const char *sd_log_boot_path_ds18b20(void) { return boot_ds18b20; }
+// #endif
 
+/** @brief Returns true if the SD card is mounted and ready. */
 bool sd_log_is_ready(void) {
     return sd_ready;
 }
 
+/** @brief Returns true if a drain is currently in progress. */
 bool sd_log_is_draining(void) {
     return sd_draining;
 }
 
+/** @brief Set the draining state flag. */
 void sd_log_set_draining(bool draining) {
     sd_draining = draining;
     /* No k_event — BLE threads are never blocked during drain.
      * Live data flows alongside drain records. */
 }
-
-/* ── Boot counter ────────────────────────────────────────────────────────── */
+/**
+ * @brief Read, increment, and persist the boot counter from /SD/bootcount.txt.
+ *
+ * @return Incremented boot count.
+ */
 static uint32_t read_and_increment_boot_count(void) {
     char fatpath[MAX_PATH_LEN];
     char buf[16];
@@ -148,17 +132,17 @@ static uint32_t read_and_increment_boot_count(void) {
     return count;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * UTC FILE TAIL HEAL
+/**
+ * @brief Truncate a UTC upload file to the last CRC-valid record boundary.
  *
- * Scans a UTC upload file and truncates it to the last byte offset at which
- * a complete, CRC-valid record ends.  Removes any partial record left by a
- * power-loss mid-write so that subsequent appends start from clean ground.
+ * Removes any partial record left by a power-loss mid-write so subsequent
+ * appends start from a clean record boundary.
  *
- * Called at init for every UTC file that exists on the card.
- * ═══════════════════════════════════════════════════════════════════════════ */
-static void heal_utc_file_tail(const char *zpath, size_t record_len)
-{
+ * @param zpath       Zephyr-style path to the UTC upload file.
+ * @param record_len  Struct payload size (without CRC trailer).
+ */
+static void heal_utc_file_tail(const char *zpath, size_t record_len) {
+
     char fatpath[MAX_PATH_LEN];
     to_fatfs_path(zpath, fatpath, sizeof(fatpath));
 
@@ -212,9 +196,12 @@ static void heal_utc_file_tail(const char *zpath, size_t record_len)
     f_close(&fil);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * INIT
- * ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * @brief Mount the SD card, build boot-numbered archive paths, and tail-heal
+ * all UTC upload files.
+ *
+ * @return 0 on success, negative errno on mount failure.
+ */
 int sd_log_init(void) {
 
     int rc = fatfs_mount();
@@ -251,35 +238,15 @@ int sd_log_init(void) {
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * BOOT PATH ACCESSORS
+/**
+ * @brief Write a binary record to an SD file under the SD mutex.
  *
- * Boot archive paths are static to this file, built once at init.
- * BLE threads retrieve the correct path via these accessors and pass it
- * directly to SD_LOG_BOOT() / SD_LOG_UTC() at the callsite.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-// #if defined(CONFIG_SENSOR_NODE_1)
-const char *sd_log_boot_path_bme(void) { return boot_bme; }
-const char *sd_log_boot_path_ens(void) { return boot_ens; }
-const char *sd_log_boot_path_snd(void) { return boot_snd; }
-// #elif defined(CONFIG_SENSOR_NODE_2)
-const char *sd_log_boot_path_as7(void) { return boot_as7; }
-const char *sd_log_boot_path_mst(void) { return boot_mst; }
-const char *sd_log_boot_path_ds18b20(void) { return boot_ds18b20; }
-// #endif
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * LOG FUNCTIONS — two generic write primitives
+ * Disables further writes if the card is full (-ENOSPC).
  *
- * All routing decisions (connected/disconnected, UTC valid, ALWAYS_WRITE)
- * are made by the caller (bme_ble_thread etc.) before calling these.
- *
- * Use SD_LOG_BOOT(path, msg_ptr) and SD_LOG_UTC(path, msg_ptr) from
- * sd_log.h at callsites — these supply sizeof automatically from the
- * pointer type, preserving type safety without per-modality functions.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
+ * @param path  Destination file path.
+ * @param msg   Record payload.
+ * @param len   Payload size in bytes.
+ */
 void sd_log_write(const char *path, const void *msg, size_t len) {
     if (!sd_ready) {
         return;
@@ -293,34 +260,18 @@ void sd_log_write(const char *path, const void *msg, size_t len) {
     k_mutex_unlock(&sd_mutex);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * DRAIN HELPERS — UTC upload files only
+/**
+ * @brief Drain BME280 UTC upload file over BLE, most-recent-first.
  *
- * Truncate-from-end pattern — most recent record first, no re-sends.
- *
- * Each function:
- *   1. Opens the UTC file FA_READ | FA_WRITE
- *   2. Seeks to the last record (fsize - stride)
- *   3. Reads and CRC-verifies it
- *   4. Sends over BLE via pack_and_notify (returns false = disconnected)
- *   5. Truncates that record off the end + f_sync (durable before next send)
- *   6. Repeats until file is empty then deletes it
- *
- * On disconnect: file contains exactly the unsent records. Next connection
- * resumes from the new end — no position tracking, no duplicates.
- *
- * Corrupt tail record: truncated off silently, next record tried.
- *
- * Throttling:
- *   drain_snd: 2000ms — gateway JSON serialisation of ~2886 byte packets
- *   drain_as7: 100ms  — ~400 byte packets, cooperative yield only
- *   drain_bme, drain_ens, drain_mst: no throttle — small packets
- * =========================================================================== */
-
+ * Waits for bme_notify_sem, then reads from the end of SD_LOG_BME280,
+ * notifies via bme_pack_and_notify(), and truncates each sent record.
+ * Returns immediately on disconnect; corrupt tail records are silently
+ * truncated.
+ */
 #if defined(CONFIG_SENSOR_NODE_1)
 
-static void drain_bme(void)
-{
+static void drain_bme(void) {
+
     k_sem_take(&bme_notify_sem, K_SECONDS(30));
     const size_t stride = sizeof(struct bme280_msg) + 4;
     char fatpath[MAX_PATH_LEN];
@@ -391,9 +342,11 @@ static void drain_bme(void)
 
     LOG_INF("SD drain BME: %d OK, %d corrupt", count, corrupt);
 }
+/**
+ * @brief Drain ENS160 UTC upload file over BLE, most-recent-first.
+ */
+static void drain_ens(void) {
 
-static void drain_ens(void)
-{
     k_sem_take(&ens_notify_sem, K_SECONDS(30));
     const size_t stride = sizeof(struct ens160_msg) + 4;
     char fatpath[MAX_PATH_LEN];
@@ -465,8 +418,14 @@ static void drain_ens(void)
     LOG_INF("SD drain ENS: %d OK, %d corrupt", count, corrupt);
 }
 
-static void drain_snd(void)
-{
+/**
+ * @brief Drain sound UTC upload file over BLE, most-recent-first.
+ *
+ * Throttled at 2000 ms per record to allow the gateway time to serialise
+ * the ~2886 byte sound JSON payload.
+ */
+static void drain_snd(void) {
+
     k_sem_take(&snd_drain_sem, K_SECONDS(30));
     const size_t stride = sizeof(struct sound_spec_msg) + 4;
     char fatpath[MAX_PATH_LEN];
@@ -547,8 +506,13 @@ static void drain_snd(void)
 
 #elif defined(CONFIG_SENSOR_NODE_2)
 
-static void drain_as7(void)
-{
+/**
+ * @brief Drain AS7343 UTC upload file over BLE, most-recent-first.
+ *
+ * Throttled at 100 ms per record for cooperative scheduling.
+ */
+static void drain_as7(void) {
+
     k_sem_take(&as7_notify_sem, K_SECONDS(30));
     const size_t stride = sizeof(struct as7343_msg) + 4;
     char fatpath[MAX_PATH_LEN];
@@ -623,8 +587,11 @@ static void drain_as7(void)
     LOG_INF("SD drain AS7: %d OK, %d corrupt", count, corrupt);
 }
 
-static void drain_mst(void)
-{
+/**
+ * @brief Drain soil moisture UTC upload file over BLE, most-recent-first.
+ */
+static void drain_mst(void) {
+
     k_sem_take(&mst_notify_sem, K_SECONDS(30));
     const size_t stride = sizeof(struct moisture_msg) + 4;
     char fatpath[MAX_PATH_LEN];
@@ -696,10 +663,11 @@ static void drain_mst(void)
     LOG_INF("SD drain MST: %d OK, %d corrupt", count, corrupt);
 }
 
-/* ── 5. Add drain_ds18b20() in the NODE_2 block alongside drain_as7/mst ─── */
- 
-static void drain_ds18b20(void)
-{
+/**
+ * @brief Drain DS18B20 UTC upload file over BLE, most-recent-first.
+ */
+static void drain_ds18b20(void) {
+
     k_sem_take(&ds18b20_notify_sem, K_SECONDS(30));
     const size_t stride = sizeof(struct ds18b20_msg) + 4;
     char fatpath[MAX_PATH_LEN];
@@ -773,16 +741,15 @@ static void drain_ds18b20(void)
 
 #endif /* CONFIG_SENSOR_NODE_1 / 2 */
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * DRAIN THREAD
+/**
+ * @brief SD drain thread — initialises SD logging then waits on sd_drain_sem.
  *
- * Triggered by k_sem_give(&sd_drain_sem) from the BLE connected() callback.
- * BLE threads are NOT blocked during drain — live data flows alongside
- * drain records.  drain_snd() is throttled internally at 2000ms/record
- * to avoid overwhelming the gateway's JSON serialiser.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
+ * Triggered by the BLE connected() callback. Runs all modality drain
+ * functions sequentially alongside live BLE data flow; does not block
+ * the modality BLE threads.
+ */
 void sd_drain_thread(void) {
+    
     sd_log_init();
     LOG_INF("SD drain thread ready");
 

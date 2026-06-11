@@ -17,16 +17,16 @@
 
 LOG_MODULE_REGISTER(time_sync, LOG_LEVEL_INF);
 
-/* ── Constants ──────────────────────────────────────────── */
+/* ── Constants */
 #define SYNC_WINDOW_SIZE  32    /* number of sync points for regression */
 
-/* ── Sync point ─────────────────────────────────────────── */
+/* ── Sync point  */
 struct sync_point {
     uint32_t local_uptime_ms;
     int64_t  utc_ms;          /* UTC in milliseconds since epoch */
 };
 
-/* ── Module state ───────────────────────────────────────── */
+/* ── Module state  */
 static struct sync_point  points[SYNC_WINDOW_SIZE];
 static uint8_t            point_count;   /* 0..SYNC_WINDOW_SIZE        */
 static uint8_t            point_head;    /* index of oldest entry       */
@@ -97,8 +97,6 @@ static void update_drift(void) {
             point_count, drift_ppm,
             (double)drift_ppm * 86400.0 / 1e6);
 }
-
-/* ── Public API ─────────────────────────────────────────── */
 
 bool time_sync_handle_write(const void *buf, uint16_t len) {
     if (len < TIMESYNC_PACKET_LEN) {

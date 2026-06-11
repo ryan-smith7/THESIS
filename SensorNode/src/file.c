@@ -29,11 +29,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* ── Logging ─────────────────────────────────────────────────────────────── */
-
 LOG_MODULE_REGISTER(fs_module, LOG_LEVEL_INF);
 
-/* ── Mount state ─────────────────────────────────────────────────────────── */
+/* Mount state*/
 
 static FATFS fat_fs;
 
@@ -48,9 +46,7 @@ static struct fs_mount_t sd_mount = {
 
 static char current_path[MAX_PATH_LEN] = SD_MOUNT_POINT;
 
-/* ══════════════════════════════════════════════════════════════════════════
- * PATH HELPERS
- * ══════════════════════════════════════════════════════════════════════════ */
+/* PATH HELPERS*/
 
 /**
  * @brief Convert a Zephyr-style /SD/... path to a FatFS SD:/... path.
@@ -86,6 +82,9 @@ static void combine_paths(const char *relative_path, char *combined_path) {
 
 /**
  * @brief Resolve a name to an absolute /SD/... path.
+ *
+ * Relative names are resolved against current_path; absolute names are
+ * copied unchanged.
  */
 static void determine_path(const char *name, char *combined_path) {
 
@@ -118,10 +117,12 @@ static void move_up_level(void) {
 	}
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * MOUNT / INIT
- * ══════════════════════════════════════════════════════════════════════════ */
-
+/**
+ * @brief Mount the FAT32 SD card, logging sector count, size, and free space.
+ *
+ * @return 0 on success, -EIO on disk access failure, or negative errno from
+ *         fs_mount().
+ */
 int fatfs_mount(void) {
 
 	static const char *disk_pdrv = "SD";
@@ -159,19 +160,16 @@ int fatfs_mount(void) {
 	return 0;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * CRC-32 (ISO 3309 / ITU-T V.42)
- *
- * Standard table-driven CRC32. No external dependency — table is built once
- * at first call from the standard polynomial 0xEDB88320 (reflected form of
- * 0x04C11DB7).
- * ══════════════════════════════════════════════════════════════════════════ */
-
 static uint32_t crc32_table[256];
 static bool     crc32_table_ready = false;
 
-static void crc32_init_table(void)
-{
+/**
+ * @brief Build the CRC32 lookup table from polynomial 0xEDB88320.
+ *
+ * Called once on first use of crc32_compute(). Table is retained in BSS.
+ */
+static void crc32_init_table(void) {
+
 	for (uint32_t i = 0; i < 256; i++) {
 		uint32_t crc = i;
 		for (int j = 0; j < 8; j++) {
@@ -182,8 +180,13 @@ static void crc32_init_table(void)
 	crc32_table_ready = true;
 }
 
-static uint32_t crc32_compute(const uint8_t *data, size_t len)
-{
+/**
+ * @brief Compute CRC32 (ISO 3309) over a byte buffer.
+ *
+ * Initialises the table on first call. Returns the standard inverted CRC.
+ */
+static uint32_t crc32_compute(const uint8_t *data, size_t len) {
+
 	if (!crc32_table_ready) {
 		crc32_init_table();
 	}
@@ -194,10 +197,12 @@ static uint32_t crc32_compute(const uint8_t *data, size_t len)
 	return crc ^ 0xFFFFFFFFU;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * PUBLIC FILE I/O  (raw FatFS)
- * ══════════════════════════════════════════════════════════════════════════ */
-
+/**
+ * @brief Append or overwrite a string to a file on the SD card.
+ *
+ * @param trunc_or_append  APPEND (1) to append, TRUNC (0) to overwrite.
+ * @return 0 on success, -EIO on failure.
+ */
 int write_data_to_file(const char *fname, char *data, uint8_t trunc_or_append) {
 	char fatpath[MAX_PATH_LEN];
 	to_fatfs_path(fname, fatpath, sizeof(fatpath));
@@ -240,8 +245,7 @@ int write_data_to_file(const char *fname, char *data, uint8_t trunc_or_append) {
  * between records corrupts at most the in-progress record — the FAT and
  * directory entry for all preceding records are already committed.
  */
-int write_raw_to_file(const char *fname, const uint8_t *data, size_t len)
-{
+int write_raw_to_file(const char *fname, const uint8_t *data, size_t len) {
 	char fatpath[MAX_PATH_LEN];
 	to_fatfs_path(fname, fatpath, sizeof(fatpath));
 
@@ -326,8 +330,7 @@ int write_raw_to_file(const char *fname, const uint8_t *data, size_t len)
  * @retval -EIO        FatFS read error.
  */
 int read_raw_verify_crc(FIL *fil, uint8_t *out, size_t record_len,
-			UINT *bytes_read)
-{
+			UINT *bytes_read) {
 	UINT br;
 	FRESULT fr;
 
@@ -371,9 +374,7 @@ int read_raw_verify_crc(FIL *fil, uint8_t *out, size_t record_len,
 	return 0;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * SHELL COMMANDS  (raw FatFS)
- * ══════════════════════════════════════════════════════════════════════════ */
+/* ---------SHELL COMMANDS  (raw FatFS)----------*/
 
 static int ls_cmd(const struct shell *shell, size_t argc, char **argv) {
 
@@ -596,10 +597,10 @@ static int remove_file_cmd(const struct shell *shell, size_t argc, char **argv) 
 	return 0;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * THREAD ENTRY POINT
- * ══════════════════════════════════════════════════════════════════════════ */
-
+/**
+ * @brief Thread entry — mounts the SD card, logs free space, and registers
+ * shell commands.
+ */
 void file_control_thread(void) {
 	int rc = fatfs_mount();
 	if (rc < 0) {

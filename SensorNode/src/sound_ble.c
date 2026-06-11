@@ -58,8 +58,7 @@ static struct bt_conn *snd_conn           = NULL;
 
 /* -- GATT callbacks ------------------------------------------------- */
 
-static void snd_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
-{
+static void snd_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value) {
     snd_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
     if (snd_notify_enabled) {
         k_sem_give(&snd_drain_sem);   /* signal drain thread */
@@ -72,8 +71,7 @@ static uint8_t last_rms_buf[2] = {0xFF, 0x70};  /* default: -120.00 dBFS */
 
 static ssize_t snd_read_handler(struct bt_conn *conn,
                                 const struct bt_gatt_attr *attr,
-                                void *buf, uint16_t len, uint16_t offset)
-{
+                                void *buf, uint16_t len, uint16_t offset) {
     return bt_gatt_attr_read(conn, attr, buf, len, offset,
                              last_rms_buf, sizeof(last_rms_buf));
 }
@@ -96,15 +94,14 @@ BT_GATT_SERVICE_DEFINE(sound_svc,
 );
 
 /* -- Connection tracking -------------------------------------------- */
-static void snd_connected(struct bt_conn *conn, uint8_t err)
-{
+static void snd_connected(struct bt_conn *conn, uint8_t err) {
+
     if (!err) {
         snd_conn = bt_conn_ref(conn);
     }
 }
 
-static void snd_disconnected(struct bt_conn *conn, uint8_t reason)
-{
+static void snd_disconnected(struct bt_conn *conn, uint8_t reason) {
     if (snd_conn) {
         bt_conn_unref(snd_conn);
         snd_conn = NULL;
@@ -126,12 +123,23 @@ static uint8_t snd_pkt_buf[SOUND_BLE_PKT_SIZE + 2U];  /* PKT_SIZE=(8+232)=240, +
 /* Semaphore to signal when previous notify completed */
 static K_SEM_DEFINE(snd_notify_sem, 0, 1);
 
-static void snd_notify_cb(struct bt_conn *conn, void *user_data)
-{
+static void snd_notify_cb(struct bt_conn *conn, void *user_data) {
     k_sem_give(&snd_notify_sem);
     ARG_UNUSED(user_data);
 }
 
+/**
+ * @brief Send a full spectrum as 3 sequential BLE notifications.
+ *
+ * Each packet contains an 8-byte header (pkt_id, total, utc_sec, utc_ms)
+ * followed by 116 big-endian uint16 bin magnitudes. The final packet
+ * appends rms_dbfs_x100 as a big-endian int16. Waits up to 200 ms for
+ * TX completion between packets; aborts on timeout or notify error.
+ *
+ * No-op if not connected or notifications are not enabled.
+ *
+ * @param spec  Spectrum message to transmit.
+ */
 void send_spectrum(const struct sound_spec_msg *spec) {
     struct bt_conn *conn = snd_conn;
     if (!snd_notify_enabled || !conn) {

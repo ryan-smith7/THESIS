@@ -2,61 +2,25 @@
  * @file sound.c
  * @brief SPH0645 I2S microphone FFT analyser thread.
  *
- * PIPELINE OVERVIEW
- * -----------------
- * Each call to process_window() handles one DMA buffer (1024 stereo frames):
+ * process_window() pipeline (1024 stereo frames per DMA buffer):
+ *   [1]  PCM extraction      — right-shift 32-bit I2S word → 18-bit signed
+ *   [2]  DC blocking filter  — 1st-order IIR highpass, removes mic DC bias
+ *   [3]  RMS accumulation    — time-domain RMS computed pre-window
+ *   [4]  Hann window         — reduce spectral leakage before FFT
+ *   [5]  1024-point FFT      — Cooley-Tukey in-place radix-2 DIT
+ *   [6]  Magnitude normalise — |X[k]| / (N/2 × FS)
+ *   [7]  CG + peak→RMS corr  — ×√2 net: undoes Hann CG (×2), peak→RMS (÷√2)
+ *   [8]  Power accumulation  — accumulate a_corr² across 43 windows
+ *   [9]  Average power→dBFS  — mean linear power per bin, then 10·log10
+ *   [10] publish()           — pack bins into uint16 BLE message, enqueue
  *
- *   Raw I2S DMA buffer
- *       │
- *       ▼
- *   [1] PCM extraction      — right-shift 32-bit I2S word → 18-bit signed int
- *       │
- *       ▼
- *   [2] DC blocking filter  — 1st-order IIR highpass, removes mic DC bias
- *       │
- *       ▼
- *   [3] RMS accumulation    — time-domain RMS computed PRE-window for the blue
- *       │                     dBFS panel; accumulated across 43 windows/sec
- *       ▼
- *   [4] Hann window         — reduce spectral leakage before FFT
- *       │
- *       ▼
- *   [5] 1024-point FFT      — Cooley-Tukey in-place radix-2 DIT
- *       │
- *       ▼
- *   [6] Magnitude + normalise — |X[k]| / (N/2 × FS), gives normalised peak amp
- *       │
- *       ▼
- *   [7] CG + peak→RMS corr  — ×√2 net factor: undoes Hann CG (×2) then
- *       │                     peak→RMS (÷√2), result is RMS-comparable amplitude
- *       ▼
- *   [8] Power accumulation  — square a_corr and accumulate; defer log to publish
- *       │
- *       ▼  (after 43 windows)
- *   [9] Average power → dBFS — mean linear power per bin, then 10·log10
- *       │
- *       ▼
- *  [10] publish()           — pack bins into uint16 BLE message, enqueue
+ * Linear power is accumulated (step 8) and converted to dB once (step 9)
+ * to avoid Jensen's inequality error from averaging in log space.
  *
- * KEY DESIGN DECISIONS
- * --------------------
- * • Accumulate in LINEAR POWER space (step 8), convert to dB once (step 9).
- *   Averaging in log space underestimates peaks due to Jensen's inequality —
- *   near-zero windows drag the dB mean far below the true energy level.
+ * 10·log10 is used at step 9 (not 20·log10) because s_bin_accum holds
+ * power (amplitude²); using 20·log10 on power would read 3 dB too low.
  *
- * • ×√2 in step 7 is the NET of two corrections:
- *     CG correction:  ×(1/0.5) = ×2.0   (Hann coherent gain = 0.5)
- *     peak → RMS:     ÷√2               (sine: A_rms = A_peak/√2)
- *     net:            ×2/√2 = ×√2
- *   This makes FFT bin amplitudes directly comparable to the time-domain
- *   RMS dBFS computed in step 3.
- *
- * • 10·log10 (not 20·log10) is used at step 9 because s_bin_accum holds
- *   POWER (amplitude²). 10·log10(P) = 20·log10(A) — using 20·log10 on power
- *   would double-count the square and read 3 dB too low.
- *
- * Hardware loopback: GPIO27 TX→RX in overlay keeps BCLK alive so RX can
- * run without an external loopback cable.
+ * Hardware loopback: GPIO27 TX→RX keeps BCLK alive without an external cable.
  */
 
 #include "sound.h"
@@ -74,7 +38,7 @@ LOG_MODULE_REGISTER(sound, LOG_LEVEL_INF);
 
 #define M_PI 3.14159265358979323846f
 
-/* ── Node labels ────────────────────────────────────────────────────────────
+/* ── Node labels 
  * Support both combined rxtx nodes (ESP32 I2S0/I2S1 with shared BCLK/WS)
  * and split rx/tx node configurations in the devicetree overlay.
  */
@@ -86,7 +50,7 @@ LOG_MODULE_REGISTER(sound, LOG_LEVEL_INF);
 #define I2S_TX_NODE  DT_NODELABEL(i2s_tx)
 #endif
 
-/* ── Audio config ───────────────────────────────────────────────────────────
+/* ── Audio config 
  * SAMPLE_RATE   : 44100 Hz — standard audio rate; SPH0645 supports up to 64kHz
  * FFT_SIZE      : 1024 points → frequency resolution = 44100/1024 ≈ 43.07 Hz/bin
  * BUF_SIZE      : one DMA buffer = 1024 frames × 2 channels × 4 bytes = 8192 bytes
@@ -106,21 +70,21 @@ LOG_MODULE_REGISTER(sound, LOG_LEVEL_INF);
 #define FREQ_RES           ((float)SAMPLE_RATE / (float)FFT_SIZE)   /* Hz per bin */
 #define WINDOWS_PER_SEC    43U
 
-/* ── Memory slabs ───────────────────────────────────────────────────────────
+/* ── Memory slabs 
  * Zephyr I2S driver requires pre-allocated fixed-size memory slabs.
  * The driver takes ownership of a slab block on read, caller must free it.
- * RX has 4 buffers to absorb scheduling jitter; TX only needs 1 (silence).
+ * RX has 4 buffers to absorb scheduling jitter; TX only needs 1 .
  */
 K_MEM_SLAB_DEFINE_STATIC(snd_rx_slab, BUF_SIZE, NUM_RX_BUFS, 4);
 K_MEM_SLAB_DEFINE_STATIC(snd_tx_slab, BUF_SIZE, NUM_TX_BUFS, 4);
 
-/* ── Message queues ─────────────────────────────────────────────────────────
+/* ── Message queues 
  * snd_q carries one sound_spec_msg per second (after 43-window accumulation)
  * to the BLE thread for chunked characteristic transmission.
  */
 K_MSGQ_DEFINE(snd_q, sizeof(struct sound_spec_msg), SOUND_Q_DEPTH, 4);
 
-/* ── Static working buffers ─────────────────────────────────────────────────
+/* ── Static working buffers
  * All declared static to avoid stack allocation of large float arrays
  * inside the thread function — ESP32 thread stacks are limited.
  *
@@ -138,17 +102,12 @@ static float   s_hann[FFT_SIZE];
 static float   s_bin_accum[FFT_SIZE / 2];
 static uint8_t s_tx_silence[BUF_SIZE];
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STEP 2 — DC BLOCKING FILTER
- * ═══════════════════════════════════════════════════════════════════════════
- * First-order IIR highpass:  y[n] = x[n] - x[n-1] + α·y[n-1]
+
+/**
+ * @brief First-order IIR DC blocking filter (α=0.9975, cutoff ≈17.6 Hz).
  *
- * With α = 0.9975 and fs = 44100 Hz:
- *   cutoff ≈ fs/(2π) · (1 - α) ≈ 17.6 Hz
- *
- * This removes the SPH0645's DC offset without affecting audio content.
- * double precision state variables prevent long-term accumulation error
- * that causes slow drift with float (was a known bug, now fixed).
+ * Removes the SPH0645 DC offset without affecting audio content.
+ * Uses double-precision state to prevent long-term drift accumulation.
  */
 static float dc_block(float x) {
     static double x1 = 0.0, y1 = 0.0;
@@ -158,49 +117,32 @@ static float dc_block(float x) {
     return (float)y;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STEP 1 — PCM EXTRACTION
- * ═══════════════════════════════════════════════════════════════════════════
- * The SPH0645 outputs 18-bit audio LEFT-JUSTIFIED in a 32-bit I2S word:
- *
- *   Bit 31 (MSB) ... Bit 14 : 18-bit signed audio data
- *   Bit 13       ... Bit  0 : always zero (padding)
- *
- * Right-shifting by g_pcm_shift (= 14) gives a signed 18-bit value in the
- * range [-131072, +131072] = [-2^17, +2^17], which is g_full_scale.
- *
- * g_pcm_shift and g_mic_slot are set at runtime by detect_and_set_shift()
- * because the ESP32 I2S DMA can start at an arbitrary WS phase, causing
- * the audio data to land in slot 0 or slot 1 unpredictably each boot.
- */
+
 static uint8_t g_pcm_shift  = 14;
 static double  g_full_scale = 131072.0;   /* 2^17 — 18-bit signed full scale */
 static uint8_t g_mic_slot   = MIC_SLOT;
 
+/**
+ * @brief Extract a signed PCM sample from a raw 32-bit I2S word.
+ *
+ * Right-shifts by g_pcm_shift to align the 18-bit left-justified audio
+ * data to a signed integer in [-2^17, +2^17].
+ */
 static inline int32_t extract_pcm(uint32_t raw) {
     return (int32_t)raw >> g_pcm_shift;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STARTUP — AUTO-DETECT BIT SHIFT AND CHANNEL SLOT
- * ═══════════════════════════════════════════════════════════════════════════
- * The ESP32 I2S DMA starts at an arbitrary WS phase each boot, causing:
- *   1. Bit shift  — audio data lands at different bit positions in the word
- *   2. Slot swap  — left/right channels may be swapped
+/**
+ * @brief Detect the correct PCM bit shift and mic channel slot at boot.
  *
- * Strategy: OR all samples in each slot across one full DMA buffer.
- * The slot with the real mic signal will have its MSB at bit 31 (18-bit
- * data left-justified). The silent/dummy slot will have near-zero OR result.
+ * ORs all samples in each I2S slot across one DMA buffer and compares MSB
+ * positions to identify which slot carries the real mic signal. Sets
+ * g_mic_slot and g_pcm_shift on success.
  *
- * Three failure modes → retry:
- *   A. best_msb < 16  — no real signal (DMA returned all zeros)
- *   B. best_msb < 31  — data not left-justified (WS phase misalignment)
- *   C. weak_msb != 0  — silent slot has ANY bits set; even weak_msb=2/3/6
- *                        causes an elevated noise floor at runtime. Only a
- *                        perfectly clean separation (weak_msb == 0) is accepted.
+ * Retries are required if the DMA returns zeros (A), data is not
+ * left-justified (B), or the silent slot has any bits set (C).
  *
- * On success: g_mic_slot and g_pcm_shift are set for the rest of runtime.
- * Returns true if locked, false if the caller should retry with fresh I2S start.
+ * @return true if slot and shift were locked successfully.
  */
 static bool detect_and_set_shift(const struct device *i2s_rx) {
     void    *mem;
@@ -262,20 +204,10 @@ static bool detect_and_set_shift(const struct device *i2s_rx) {
     return true;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STEP 4 — HANN WINDOW (pre-computed)
- * ═══════════════════════════════════════════════════════════════════════════
- * w[n] = 0.5 · (1 - cos(2π·n / (N-1)))   for n = 0..N-1
+/**
+ * @brief Pre-compute the Hann window coefficients into s_hann[].
  *
- * Properties relevant to this pipeline:
- *   Coherent gain (CG) = 0.5   — a pure sine is attenuated to half amplitude
- *   Power gain     (PG) = 0.375
- *
- * Using (N-1) in the denominator gives a symmetric window that goes to zero
- * at both endpoints, minimising spectral leakage from signal discontinuities
- * at the buffer boundaries.
- *
- * Pre-computing once at startup avoids 1024 cosf() calls per window.
+ * Called once at startup. Avoids 1024 cosf() calls per window at runtime.
  */
 static void init_hann(void) {
     for (uint32_t i = 0; i < FFT_SIZE; i++) {
@@ -283,24 +215,11 @@ static void init_hann(void) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STEP 5 — 1024-POINT FFT (Cooley-Tukey radix-2 DIT)
- * ═══════════════════════════════════════════════════════════════════════════
- * In-place split-radix FFT operating on s_fft_re[] (real) and s_fft_im[]
- * (imaginary). Input must be loaded before calling; output overwrites input.
+/**
+ * @brief In-place 1024-point Cooley-Tukey radix-2 DIT FFT.
  *
- * Phase 1 — Bit-reversal permutation:
- *   Reorders samples so that the butterfly stages operate on contiguous pairs.
- *   Standard Cooley-Tukey requires input in bit-reversed order.
- *
- * Phase 2 — Butterfly stages (log2(N) = 10 stages for N=1024):
- *   Each stage doubles the DFT length using the twiddle factor:
- *     W = e^{-j·2π/len}
- *   The butterfly: X[u] = X[u] + W^k·X[v]
- *                  X[v] = X[u] - W^k·X[v]
- *
- * Output X[k] for k = 0..511 gives the positive-frequency spectrum.
- * Bins k=512..1023 are the conjugate mirror and are not used.
+ * Operates on s_fft_re[] and s_fft_im[]. Input must be loaded before
+ * calling. Positive-frequency bins are in indices 0..511 on output.
  */
 static void fft_compute(void) {
     uint32_t n = FFT_SIZE;
@@ -341,21 +260,15 @@ static void fft_compute(void) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STEP 10 — PUBLISH
- * ═══════════════════════════════════════════════════════════════════════════
- * At this point s_bin_accum[k] holds the mean dBFS per bin (set by the
- * averaging loop in process_window before publish() is called).
+/**
+ * @brief Encode the averaged spectrum into a sound_spec_msg and enqueue it.
  *
- * Encoding for BLE transmission:
- *   dBFS range is clamped to [-120, 0].
- *   Mapped to uint16: v = (db + 120) × 100
- *   This gives 0 = silence (−120 dBFS) and 12000 = full scale (0 dBFS),
- *   with 0.01 dB resolution across the full range.
+ * Clamps each bin to [-120, 0] dBFS and maps to uint16 as (db+120)×100.
+ * Drops the oldest queue entry if snd_q is full.
  *
- * If the queue is full the oldest message is discarded and replaced,
- * ensuring the BLE thread always sees the latest spectrum rather than
- * stalling on a full queue.
+ * @param avg_dbfs     Time-domain RMS dBFS across the accumulation window.
+ * @param peak_freq    Frequency (Hz) of the peak spectral bin.
+ * @param peak_mag_db  Magnitude (dBFS) of the peak spectral bin.
  */
 static void publish(double avg_dbfs, float peak_freq, float peak_mag_db) {
 
@@ -377,9 +290,15 @@ static void publish(double avg_dbfs, float peak_freq, float peak_mag_db) {
         /* Encode: shift into [0, 12000], scale ×100 for 0.01 dB resolution */
         int32_t v = (int32_t)((db + 120.0f) * 100.0f);
 
-        if (v < 0)          { spec.bins[i] = 0;     }
-        else if (v > 65535) { spec.bins[i] = 65535;  }
-        else                { spec.bins[i] = (uint16_t)v; }
+        if (v < 0) {
+            spec.bins[i] = 0;
+        }
+        else if (v > 65535) {
+            spec.bins[i] = 65535;
+        }
+        else {
+            spec.bins[i] = (uint16_t)v;
+        }
     }
 
     /* Drop oldest if full — never block the audio thread on BLE backpressure */
@@ -393,21 +312,17 @@ static void publish(double avg_dbfs, float peak_freq, float peak_mag_db) {
             avg_dbfs, (double)peak_freq, (double)peak_mag_db);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * STEPS 2–9 — PROCESS ONE WINDOW
- * ═══════════════════════════════════════════════════════════════════════════
- * Called once per DMA buffer (every ~23.2 ms at 44100 Hz / 1024 samples).
- * Accumulates 43 windows before publishing (~1 second of audio per publish).
+/**
+ * @brief Process one DMA buffer through the full DSP pipeline
  *
- * ACCUMULATOR DESIGN NOTE:
- *   s_bin_accum[] holds LINEAR POWER (amplitude²), not dBFS.
- *   Converting to dB before averaging causes Jensen's inequality error:
- *     mean(log(x)) ≤ log(mean(x))   [log is concave]
- *   For a swept sine, bins where the tone is absent contribute near-zero
- *   power. In log space those zeros pull the average far below the true
- *   energy; in linear power space they are negligible against the windows
- *   where the tone was present. The spectrogram sweep arc is only visible
- *   with power-domain averaging.
+ * Accumulates linear power across WINDOWS_PER_SEC (~43) windows, then
+ * converts to dBFS and calls publish(). Resets all accumulators after
+ * each publish cycle.
+ *
+ * @param frames       Pointer to interleaved stereo I2S DMA buffer.
+ * @param num_frames   Number of stereo frames in the buffer (1024).
+ * @param rms_accum    Accumulated per-window RMS across the current cycle.
+ * @param accum_count  Number of windows accumulated so far.
  */
 static void process_window(uint32_t *frames, size_t num_frames,
                            double *rms_accum, uint32_t *accum_count) {
@@ -425,7 +340,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
                raw0, extract_pcm(raw0), mn, mx, mx - mn);
     }
 
-    /* ── STEPS 2 & 3: DC block + time-domain RMS ───────────────────────────
+    /* ── time-domain RMS ─────
      * DC block is applied first so the RMS measurement is not biased by the
      * mic's DC offset. RMS is computed PRE-Hann so it reflects the true
      * signal energy, not the windowed (attenuated) signal.
@@ -447,7 +362,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
     }
     *rms_accum += sqrt(sum_sq / (double)num_frames);   /* accumulate per-window RMS */
 
-    /* ── STEP 4: Hann window ────────────────────────────────────────────────
+    /* ── Hann window 
      * Multiply each sample by the pre-computed Hann coefficient.
      * This tapers the signal to zero at both ends of the buffer, preventing
      * the spectral leakage that would occur if the buffer boundaries cut
@@ -460,7 +375,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
         s_windowed[i] *= s_hann[i];
     }
 
-    /* ── STEP 5: FFT input load ─────────────────────────────────────────────
+    /* ── FFT input load 
      * Copy windowed real samples into the FFT real array; zero the imaginary
      * part (real-valued input). Pad with zeros if num_frames < FFT_SIZE
      * (should not occur in normal operation — both are 1024).
@@ -471,9 +386,9 @@ static void process_window(uint32_t *frames, size_t num_frames,
     }
     fft_compute();   /* in-place Cooley-Tukey, see fft_compute() above */
 
-    /* ── STEPS 6, 7, 8: Normalise → correct → accumulate power ─────────────
+    /* ──Normalise → correct → accumulate power
      *
-     * STEP 6 — Normalise FFT magnitude:
+     *— Normalise FFT magnitude:
      *   norm = (N/2) × full_scale = 512 × 131072 = 67,108,864
      *   mag  = |X[k]| / norm
      *
@@ -481,7 +396,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
      *   the Hann-windowed FFT gives |X[k]| ≈ A × CG × (N/2) = 33,554,432
      *   so mag = 33,554,432 / 67,108,864 = 0.5  (normalised peak amplitude)
      *
-     * STEP 7 — Coherent gain + peak→RMS correction:
+     * — Coherent gain + peak→RMS correction:
      *   a_corr = mag × √2
      *
      *   This is the NET of two corrections applied simultaneously:
@@ -493,7 +408,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
      *     a_corr = 0.5 × 1.4142 = 0.7071
      *     20·log10(0.7071) = −3.01 dBFS  ✓  (correct RMS of a full-scale sine)
      *
-     * STEP 8 — Accumulate LINEAR POWER:
+     * — Accumulate LINEAR POWER:
      *   s_bin_accum[k] += a_corr²
      *
      *   Power is accumulated (not dB) so that the averaging in step 9 is
@@ -513,7 +428,7 @@ static void process_window(uint32_t *frames, size_t num_frames,
         return;
     }
 
-    /* ── STEP 9: Average power → dBFS ──────────────────────────────────────
+    /* ── average power → dBFS 
      *
      *   avg_power = s_bin_accum[k] / W        (mean linear power across W windows)
      *   dBFS[k]   = 10·log10(avg_power)
@@ -555,28 +470,12 @@ static void process_window(uint32_t *frames, size_t num_frames,
     *accum_count = 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * SOUND THREAD ENTRY POINT
- * ═══════════════════════════════════════════════════════════════════════════
- * Initialises I2S TX (silence loopback) and RX, then enters the startup
- * retry loop to lock the WS phase before beginning audio processing.
+/**
+ * @brief Sound thread entry point — initialises I2S, locks WS phase, then
+ * reads DMA buffers and calls process_window() in a continuous loop.
  *
- * STARTUP RETRY LOOP:
- *   The ESP32 I2S DMA starts at an arbitrary WS phase each boot. A jittered
- *   delay (100 + (attempt % 7) × 11 ms) breaks the deterministic phase cycle
- *   that would otherwise cause long retry sequences. Typically locks in 1–4
- *   attempts.
- *
- * OVERRUN RECOVERY:
- *   -EIO from i2s_read() indicates a DMA overrun (audio thread starved).
- *   Full I2S restart is performed, including re-running detect_and_set_shift()
- *   because WS phase may have changed. s_bin_accum is explicitly zeroed to
- *   prevent a partial accumulation from producing a spurious spike on the
- *   next publish.
- *
- * MAIN LOOP:
- *   Reads one DMA buffer per iteration (~23.2 ms), calls process_window(),
- *   then frees the slab back to the driver.
+ * Performs a jittered startup retry to lock the WS phase, and a full I2S
+ * restart with accumulator reset on DMA overrun (-EIO).
  */
 void sound_thread(void) {
     const struct device *i2s_rx = DEVICE_DT_GET(I2S_RX_NODE);
@@ -601,19 +500,22 @@ void sound_thread(void) {
     };
 
     if (i2s_configure(i2s_tx, I2S_DIR_TX, &cfg) < 0) {
-        LOG_ERR("TX configure failed"); return;
+        LOG_ERR("TX configure failed");
+        return;
     }
 
     cfg.mem_slab = &snd_rx_slab;
     if (i2s_configure(i2s_rx, I2S_DIR_RX, &cfg) < 0) {
-        LOG_ERR("RX configure failed"); return;
+        LOG_ERR("RX configure failed");
+        return;
     }
 
     /* Prime TX with silence so BCLK is live before RX starts */
     i2s_write(i2s_tx, s_tx_silence, BUF_SIZE);
 
     if (i2s_trigger(i2s_tx, I2S_DIR_TX, I2S_TRIGGER_START) < 0) {
-        LOG_ERR("TX START failed"); return;
+        LOG_ERR("TX START failed");
+        return;
     }
 
     /* Startup retry loop — jittered delay to randomise WS phase */
@@ -621,7 +523,8 @@ void sound_thread(void) {
         k_sleep(K_MSEC(100 + (attempt % 7) * 11));
 
         if (i2s_trigger(i2s_rx, I2S_DIR_RX, I2S_TRIGGER_START) < 0) {
-            LOG_ERR("RX START failed"); return;
+            LOG_ERR("RX START failed");
+            return;
         }
 
         if (detect_and_set_shift(i2s_rx)) {
@@ -662,7 +565,8 @@ void sound_thread(void) {
             for (int attempt = 1; ; attempt++) {
                 k_sleep(K_MSEC(50 + (attempt % 7) * 11));
                 if (i2s_trigger(i2s_rx, I2S_DIR_RX, I2S_TRIGGER_START) < 0) {
-                    LOG_ERR("RX START failed in overrun recovery"); break;
+                    LOG_ERR("RX START failed in overrun recovery");
+                    break;
                 }
                 if (detect_and_set_shift(i2s_rx)) {
                     LOG_INF("Overrun recovered on attempt %d", attempt);

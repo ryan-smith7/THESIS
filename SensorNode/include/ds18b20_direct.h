@@ -4,7 +4,6 @@
  * Direct DS18B20 1-Wire driver for ESP32 on Zephyr RTOS.
  * Bypasses Zephyr's w1_serial driver entirely.
  *
- * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef DS18B20_DIRECT_H

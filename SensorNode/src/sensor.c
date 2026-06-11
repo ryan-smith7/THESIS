@@ -24,11 +24,11 @@ LOG_MODULE_REGISTER(sensor_module, LOG_LEVEL_INF);
 
 #define SAMPLE_PERIOD_MS 10000
 
-/* ── Moisture Sensor Polynomial Calibration ────────────────────────────────
+/* ── Moisture Sensor Polynomial Calibration 
  * θ_g (%) = a2·V² + a1·V + a0
  * where V = raw ADC count (0–4095)
  * Coefficients from moisture_calibration.xlsx → Coefficients sheet
- * ───────────────────────────────────────────────────────────────────────── */
+ */
 #define CONFIG_MOISTURE_DRY_ADC       2371       /* clamp floor — above = 0% */
 #define CONFIG_MOISTURE_COEFF_A3  -0.0000001095f
 #define CONFIG_MOISTURE_COEFF_A2  0.00051806f
@@ -60,8 +60,10 @@ K_MSGQ_DEFINE(ds18b20_q, sizeof(struct ds18b20_msg), Q_DEPTH, 4);
 /* Final telemetry queue: full samples -> BLE */
 K_MSGQ_DEFINE(full_q, sizeof(struct sensor_blk), Q_DEPTH, 4);
 
-/* -------------------------------------------------------------------------- */
-/* --- BME280 thread --- */
+/**
+ * @brief BME280 sensor thread — fetches temperature, humidity, and pressure
+ * at SAMPLE_PERIOD_ENV_MS and enqueues bme280_msg into bme_q.
+ */
 void bme280_thread(void) {
 
     const struct device *dev = DEVICE_DT_GET_ONE(bosch_bme280);
@@ -103,8 +105,10 @@ void bme280_thread(void) {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* --- ENS160 thread --- */
+/**
+ * @brief ENS160 sensor thread — fetches eCO2, TVOC, and AQI at
+ * SAMPLE_PERIOD_ENV_MS and enqueues ens160_msg into ens_q.
+ */
 void ens160_thread(void) {
 
     const struct device *dev = DEVICE_DT_GET_ONE(sciosense_ens160);
@@ -149,7 +153,13 @@ void ens160_thread(void) {
     }
 }
 
-/* ── combined BME280 + ENS160 thread ───────────────────────────────────── */
+/**
+ * @brief Combined BME280 + ENS160 thread — fetches both sensors in lockstep.
+ *
+ * BME280 temperature and humidity are written to ENS160 as compensation
+ * values before each ENS160 fetch, improving eCO2 and TVOC accuracy.
+ * Publishes to bme_q and ens_q at SAMPLE_PERIOD_ENV_MS.
+ */
 void env_thread(void) {
     const struct device *bme_dev = DEVICE_DT_GET_ONE(bosch_bme280);
     const struct device *ens_dev = DEVICE_DT_GET_ONE(sciosense_ens160);
@@ -167,7 +177,7 @@ void env_thread(void) {
     struct sensor_value temp, press, hum, eco2, tvoc, aqi;
 
     while (1) {
-        /* ── 1. Fetch BME280 ───────────────────────────────────────────── */
+        /* Fetch BME280 */
         if (sensor_sample_fetch(bme_dev) < 0) {
             LOG_ERR("BME280: fetch failed");
             k_msleep(SAMPLE_PERIOD_ENV_MS);
@@ -185,14 +195,14 @@ void env_thread(void) {
         bme.utc_sec   = time_sync_get_utc_ms(&bme.utc_ms);
         bme.uptime_ms = (uint64_t)k_uptime_get();
 
-        /* ── 2. Push compensation to ENS160 ────────────────────────────── */
+        /* ── Push compensation to ENS160 */
         /*
          * sensor_attr_set() writes TEMP_IN (0x13) and RH_IN (0x15).
          * The Zephyr ENS160 driver converts internally:
          *   TEMP_IN = (T_celsius + 273.15) * 64   [1/64 K, little-endian]
          *   RH_IN   = RH_percent * 512             [1/512 %RH, little-endian]
          * We must write BEFORE sensor_sample_fetch(ens_dev) so the ENS160
-         * bakes these values into the very next measurement cycle.
+         * uses these values in the measurement cycle.
          */
         struct sensor_value temp_clamped = hum;
         temp_clamped.val1 = CLAMP(temp_clamped.val1, -5, 60);
@@ -209,7 +219,7 @@ void env_thread(void) {
             LOG_WRN("ENS160: RH_IN write failed — uncompensated");
         }
 
-        /* ── 3. Fetch ENS160 (now uses the T/RH we just wrote) ─────────── */
+        /* ── Fetch ENS160 (now uses the T/RH that was just wrote) */
         if (sensor_sample_fetch(ens_dev) < 0) {
             LOG_ERR("ENS160: fetch failed");
             k_msleep(SAMPLE_PERIOD_ENV_MS);
@@ -257,14 +267,15 @@ void env_thread(void) {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* AS7343 thread                                                               */
-/* -------------------------------------------------------------------------- */
- 
 static const int wl_order[13] = {
     405, 425, 450, 475, 515, 550, 555, 600, 640, 690, 745, 855, 999
 };
- 
+
+/**
+ * @brief Map a wavelength in nm to its index in the 13-channel output array.
+ *
+ * @return Index 0..12, or -1 if the wavelength is not in wl_order[].
+ */
 static int wl_index(int nm) {
     
     for (int i = 0; i < 13; ++i) {
@@ -272,7 +283,14 @@ static int wl_index(int nm) {
     }
     return -1;
 }
- 
+
+/**
+ * @brief AS7343 spectral sensor thread — fetches 13-channel irradiance
+ * (12 spectral + 1 VIS broadband) and enqueues as7343_msg into as7_q.
+ *
+ * Runs dark offset calibration once at startup before the sample loop.
+ * Samples at SAMPLE_PERIOD_MS.
+ */
 void as7343_thread(void) {
 
     k_msleep(10000);
@@ -329,7 +347,7 @@ void as7343_thread(void) {
             (const struct as7343_data *)dev->data;
         ch12[12] = (uint32_t)(drv->vis_irradiance_mW * 1000.0f);
  
-        /* Pack into message ------------------------------------------------- */
+        /* Pack into message */
         struct as7343_msg msg = {0};
         for (int i = 0; i < 13; ++i) {
             msg.ch[i] = ch12[i];
@@ -347,8 +365,6 @@ void as7343_thread(void) {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* --- Capacitive Soil Moisture Sensor thread ------------------------------- */
 #if defined(CONFIG_MST_POLY)
 /* Polynomial calibration: θ_g (%) = a3·V³ + a2·V² + a1·V + a0
  * Input:  raw 12-bit ADC count (0–4095)
@@ -385,6 +401,11 @@ static uint16_t compute_vwc_x100_two_point(uint16_t raw) {
 }
 #endif
 
+/**
+ * @brief Capacitive soil moisture thread — reads ADC, converts to VWC via
+ * polynomial or two-point calibration, and enqueues moisture_msg into
+ * moisture_q at SAMPLE_PERIOD_MOISTURE_MS.
+ */
 void moisture_thread(void) {
 
     if (!adc_is_ready_dt(&moisture_adc)) {
@@ -443,9 +464,12 @@ void moisture_thread(void) {
     }
 }
 
-/* --- DS18B20 thread --- */
-void ds18b20_thread(void)
-{
+/**
+ * @brief DS18B20 temperature thread — reads soil temperature via the direct
+ * UART driver and enqueues ds18b20_msg into ds18b20_q at SAMPLE_PERIOD_SOIL_MS.
+ */
+void ds18b20_thread(void) {
+
     int ret = ds18b20_direct_init();
     if (ret != 0) {
         LOG_ERR("DS18B20 direct init failed: %d", ret);
@@ -484,6 +508,13 @@ void ds18b20_thread(void)
 
 #if defined(CONFIG_FUEL_GAUGE)
 
+/**
+ * @brief MAX17048 fuel gauge thread — reads cell voltage and state of charge,
+ * triggers deep sleep on three consecutive low-voltage readings, and enqueues
+ * batt_msg into batt_q at SAMPLE_PERIOD_MS.
+ *
+ * Issues a quick-start command on boot to force OCV re-measurement.
+ */
 void max17048_thread(void) {
     uint8_t low_count = 0;
     const struct device *dev = DEVICE_DT_GET_ONE(maxim_max17048);

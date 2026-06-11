@@ -22,28 +22,19 @@
 #include <string.h>
 #include <ff.h>
 
-/* -- Mount point ---------------------------------------------------- */
-
 /** Root mount point for the FAT32 SD card.
  *  Must match the disk-name in the device tree overlay ("SD"). */
 #define SD_MOUNT_POINT  "/SD"
 
-/* -- Thread configuration ------------------------------------------ */
-
 #define FILE_STACK_SIZE  4096
 #define FILE_PRIORITY    5
 
-/* -- Path helpers --------------------------------------------------- */
-
 #define MAX_PATH_LEN  256
-
-/* -- Write mode flags ----------------------------------------------- */
 
 #define INVALID  (-1)
 #define APPEND     1
 #define TRUNC      0
 
-/* -- Public API ----------------------------------------------------- */
 
 /**
  * @brief Mount the FAT32 SD card file system.
