@@ -1,16 +1,5 @@
 /*
  * main.c — Combined BLE Central + Network + Azure IoT Hub Gateway
- *
- * Supports two hardware platforms selected at build time:
- *
- *   CONFIG_ETH_GATEWAY=y   →  ESP32-POE  (LAN8720 / RMII Ethernet)
- *   CONFIG_ETH_GATEWAY=n   →  ESP32-WROVER (WiFi)
- *
- * Boot sequence (both platforms):
- *   1. Network thread  — brings up Ethernet/WiFi, obtains DHCP lease (blocks)
- *   2. Azure MQTT thread — connects to IoT Hub, keepalive loop
- *   3. SNTP sync       — sets UTC reference for time_sync_writer
- *   4. BLE threads     — scan, connect to sensor nodes, decode + publish
  */
 
 #include <zephyr/kernel.h>
@@ -41,9 +30,8 @@ K_THREAD_STACK_DEFINE(net_stack, NET_THREAD_STACK);
 static struct k_thread net_tid;
 
 /*
- * BLE threads — delay 15 s so the network + Azure MQTT are fully up
+ * BLE threads — delay 5s so the network + Azure MQTT are fully up
  * before BLE starts trying to publish.
- * Budget: Ethernet/WiFi ~3–5 s + MQTT connect ~5 s + margin.
  */
 K_THREAD_DEFINE(process_data_tid,
                 BASE_PROCESS_STACK_SIZE,
@@ -59,8 +47,7 @@ K_THREAD_DEFINE(base_tid,
                 BASE_CONTROL_PRIORITY, 0,
                 5000);
 
-int main(void)
-{
+int main(void) {
     LOG_INF("=== Combined BLE+Network Gateway starting (%s) ===",
             GATEWAY_BOARD_STR);
 
@@ -81,7 +68,7 @@ int main(void)
     LOG_INF("Network ready — starting Azure MQTT");
     azure_mqtt_thread_start();
 
-    /* Give MQTT a moment to connect before SNTP tries DNS */
+    /* Gives MQTT a moment before SNTP tries DNS */
     k_sleep(K_SECONDS(3));
 
     LOG_INF("Starting SNTP sync");
