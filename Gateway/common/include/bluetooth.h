@@ -11,15 +11,7 @@
 #include <zephyr/bluetooth/uuid.h>
 
 /*
- * Stack sizes and connection limit differ by hardware platform:
- *
- *   ESP32-POE  (CONFIG_ETH_GATEWAY=y):
- *     Tighter DRAM budget — BT + Ethernet share 96 KB dram1.
- *     MAX_CONN 3: POE board drives fewer sensor nodes.
- *
- *   ESP32-WROVER (CONFIG_ETH_GATEWAY not set):
- *     SPIRAM available — larger stacks, more simultaneous nodes.
- *     MAX_CONN 3: WROVER gateway handles up to 3 BLE peripherals.
+ * Stack sizes and connection limit differ by Gateway platform:
  */
 #if defined(CONFIG_ETH_GATEWAY)
 #  define BASE_CONTROL_STACK_SIZE  1536

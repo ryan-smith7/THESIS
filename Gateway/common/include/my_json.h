@@ -1,24 +1,6 @@
 /**
  * @file my_json.h
- * @brief Per-modality JSON encoders for gateway → Azure IoT Hub.
- *
- * Each encoder writes directly into a caller-supplied buffer and returns
- * the number of bytes written (>0) or a negative error code.
- *
- * JSON format per modality:
- *   {
- *     "deviceId": "dev-N",
- *     "utc_sec": NNNN,        ← UTC seconds at measurement on sensor node
- *     "<modality>": { ... }
- *   }
- *
- * utc_sec is stamped by the sensor node at the moment of measurement via
- * time_sync_get_utc(). The Azure Function uses this value as the SQL
- * timestamp rather than datetime.utcnow(), giving accurate measurement
- * time even after SD card drain replay.
- *
- * Value is 0 if the sensor node has not yet received a time sync — the
- * Azure Function falls back to server time in that case.
+ * @brief Per-modality JSON encoders for gateway → Oracle Cloud.
  */
 
 #ifndef MY_JSON_H
@@ -42,10 +24,10 @@
 #define SOUND_NUM_BINS 348
 
 
-/* ═══════════════════════════════════════════════════════════
+/*
  * Raw decoded structs — populated by bluetooth.c notify
  * handlers directly from BLE payload bytes (big-endian).
- * ═══════════════════════════════════════════════════════════ */
+ */
 
 /** BME280 — temperature, humidity, pressure */
 typedef struct {
@@ -122,9 +104,7 @@ typedef struct {
     uint8_t  dev_id;
 } mod_ds18b20_t;
 
-/* ═══════════════════════════════════════════════════════════
- * Encoders
- * ═══════════════════════════════════════════════════════════ */
+/* -------------------Encoders-------------------*/
 
 int json_encode_bme(const mod_bme_t *m, char *buf, size_t buf_size);
 int json_encode_ens(const mod_ens_t *m, char *buf, size_t buf_size);

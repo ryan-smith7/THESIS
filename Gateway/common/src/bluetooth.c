@@ -53,9 +53,7 @@
 
 LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_INF);
 
-/* ═══════════════════════════════════════════════════════════
- * UUIDs
- * ═══════════════════════════════════════════════════════════ */
+/*----------------------UUIDs--------------------------------*/
 
 static struct bt_uuid_128 tracker_service_uuid = BT_UUID_INIT_128(
     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
@@ -108,9 +106,7 @@ static struct bt_uuid_128 ds18b20_char_uuid = BT_UUID_INIT_128(
 
 static struct bt_uuid_16 cccd_uuid = BT_UUID_INIT_16(0x2902);
 
-/* ═══════════════════════════════════════════════════════════
- * Per-connection state
- * ═══════════════════════════════════════════════════════════ */
+/* -------------------Per-connection state-------------------*/
 static struct bt_conn *conns[MAX_CONN];
 
 #define DECL_MOD(name) \
@@ -178,15 +174,18 @@ static void discover_cur_char(struct bt_conn *conn, int index);
 static void discover_ds18b20_char(struct bt_conn *conn, int index);
 static void discover_done(struct bt_conn *conn, int index);
 
-/* ═══════════════════════════════════════════════════════════
- * Helpers
- * ═══════════════════════════════════════════════════════════ */
+/* -------------------Helpers-------------------*/
 
  /* ── Delayed discovery work — stagger dual-connection chains ─────────── */
 static struct k_work_delayable disc_work[MAX_CONN];
 
-static void disc_work_handler(struct k_work *work)
-{
+/**
+ * @brief Delayed work handler — starts the discovery chain for a connection.
+ *
+ * Staggered via disc_work to prevent concurrent bt_gatt_discover() calls
+ * from two nodes stepping on each other.
+ */
+static void disc_work_handler(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     int index = (int)(dwork - disc_work);
     if (conns[index]) {
@@ -197,11 +196,16 @@ static void disc_work_handler(struct k_work *work)
 /* ── Scan restart work — never sleep in BLE callbacks ───────────────── */
 static struct k_work scan_start_work;
 
-static void scan_start_work_handler(struct k_work *work)
-{
+/**
+ * @brief Work handler to restart scanning off BLE callback context.
+ */
+static void scan_start_work_handler(struct k_work *work) {
     start_scan();
 }
 
+/**
+ * @brief Return the slot index for a given connection, or INVALID if not found.
+ */
 static int get_conn_index(struct bt_conn *conn) {
     for (int i = 0; i < MAX_CONN; i++) {
         if (conns[i] == conn) return i;
@@ -209,6 +213,11 @@ static int get_conn_index(struct bt_conn *conn) {
     return INVALID;
 }
 
+/**
+ * @brief Check whether a target UUID appears in a BLE advertisement payload.
+ *
+ * Walks the AD structure looking for UUID128_ALL or UUID128_SOME records.
+ */
 static bool is_uuid_in_ad(struct net_buf_simple *ad, const struct bt_uuid *uuid) {
     size_t offset = 0;
     while (offset < ad->len) {
@@ -257,13 +266,13 @@ static inline int32_t be32s(const uint8_t *b) {
                      ((uint32_t)b[2]<<8)| (uint32_t)b[3]);
 }
 
-/* ═══════════════════════════════════════════════════════════
- * NOTIFY HANDLERS
- *
+
+/* ------------------NOTIFY HANDLERS-------------------------
+
  * All payloads begin with 4 bytes of utc_sec (big-endian uint32)
  * stamped on the sensor node at measurement via time_sync_get_utc().
  * Value is 0 if the sensor node has not yet received a time sync.
- * ═══════════════════════════════════════════════════════════ */
+ */
 
 /* ── BME280 ──────── */
 static uint8_t bme_notify_func(struct bt_conn *conn,
@@ -321,8 +330,8 @@ static uint8_t ens_notify_func(struct bt_conn *conn,
 /* ── AS7343 (30 bytes: uptime(4) + 13×uint16(26)) ────────────────────── */
 static uint8_t as7_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
-                                const void *data, uint16_t length)
-{
+                                const void *data, uint16_t length) {
+
     if (!data || length != AS7_PAYLOAD_LEN) {
         return BT_GATT_ITER_CONTINUE;
     }
@@ -355,6 +364,7 @@ static uint8_t as7_notify_func(struct bt_conn *conn,
 static uint8_t mst_notify_func(struct bt_conn *conn,
                                 struct bt_gatt_subscribe_params *params,
                                 const void *data, uint16_t length) {
+
     if (!data || length != MST_PAYLOAD_LEN) {
         return BT_GATT_ITER_CONTINUE;
     }
@@ -519,10 +529,9 @@ static uint8_t sound_notify_func(struct bt_conn *conn,
     return BT_GATT_ITER_CONTINUE;
 }
 
-/* ═══════════════════════════════════════════════════════════
- * DISCOVERY CHAIN
+/* DISCOVERY CHAIN
  * sensor → sound → bme → ens → as7 → mst → bat → done
- * ═══════════════════════════════════════════════════════════ */
+ */
 
 #define MODALITY_DISC_FUNCS(name, next_fn, notify_fn)                          \
 static uint8_t name##_cccd_disc_func(struct bt_conn *conn,                     \
@@ -576,7 +585,13 @@ static void discover_##name##_char(struct bt_conn *conn, int index)            \
     if (err) LOG_ERR("[" #name " %d] discover failed (%d)", index, err);       \
 }
 
-/* ── Sensor (chains to sound, no notify — time sync write target only) ── */
+/**
+ * @brief Sensor characteristic CCCD discovery callback.
+ *
+ * Stashes the CCCD handle, sends an initial time sync write, then
+ * chains to discover_sound_char(). This
+ * characteristic is a write target only.
+ */
 static uint8_t sensor_cccd_disc_func(struct bt_conn *conn,
                                       const struct bt_gatt_attr *attr,
                                       struct bt_gatt_discover_params *params) {
@@ -597,6 +612,10 @@ static uint8_t sensor_cccd_disc_func(struct bt_conn *conn,
     return BT_GATT_ITER_STOP;
 }
 
+/**
+ * @brief Sensor characteristic discovery callback — resolves the value
+ * handle then triggers CCCD discovery.
+ */
 static uint8_t sensor_disc_func(struct bt_conn *conn,
                                  const struct bt_gatt_attr *attr,
                                  struct bt_gatt_discover_params *params) {
@@ -616,6 +635,9 @@ static uint8_t sensor_disc_func(struct bt_conn *conn,
     return BT_GATT_ITER_STOP;
 }
 
+/**
+ * @brief Kick off GATT discovery for the sensor (time sync) characteristic.
+ */
 static void discover_sensor_char(struct bt_conn *conn, int index) {
 
     sensor_disc[index].uuid         = &tracker_char_uuid.uuid;
@@ -629,6 +651,10 @@ static void discover_sensor_char(struct bt_conn *conn, int index) {
     }
 }
 
+/**
+ * @brief Final step of the discovery chain — subscribes to all modalities
+ * whose char and CCCD handles were successfully resolved.
+ */
 static void discover_done(struct bt_conn *conn, int index) {
     /* All handles now populated — subscribe to everything in one burst.
      * Modalities skipped if their char/CCCD wasn't found (handle == 0). */
@@ -686,7 +712,8 @@ static void discover_done(struct bt_conn *conn, int index) {
     LOG_INF("[BASE %d] Discovery chain complete — all subscribed", index);
 }
 
-/* Expand modality discovery triplets — chain order: sound→bme→ens→as7→mst→bat→done */
+/* Create modality discoveries from the generic functions
+— chain order: sound→bme→ens→as7→mst→bat→done */
 MODALITY_DISC_FUNCS(sound, discover_bme_char,  sound_notify_func)
 MODALITY_DISC_FUNCS(bme,   discover_ens_char,  bme_notify_func)
 MODALITY_DISC_FUNCS(ens,   discover_as7_char,  ens_notify_func)
@@ -696,10 +723,11 @@ MODALITY_DISC_FUNCS(bat,   discover_cur_char,  bat_notify_func)
 MODALITY_DISC_FUNCS(cur,     discover_ds18b20_char, cur_notify_func)
 MODALITY_DISC_FUNCS(ds18b20, discover_done,         ds18b20_notify_func)
 
-/* ═══════════════════════════════════════════════════════════
- * Scan and connection management
- * ═══════════════════════════════════════════════════════════ */
-
+/**
+ * @brief Start a passive BLE scan for tracker service advertisements.
+ *
+ * Includes a 1.5 s settle delay before calling bt_le_scan_start().
+ */
 static void start_scan(void) {
     struct bt_le_scan_param scan_params = {
         .type     = BT_HCI_LE_SCAN_PASSIVE,
@@ -716,6 +744,12 @@ static void start_scan(void) {
     }
 }
 
+/**
+ * @brief BLE scan callback — connects to the first available SensorNode found.
+ *
+ * Ignores advertisements if MQTT is not connected or all connection
+ * slots are occupied. Stops scanning before initiating the connection.
+ */
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                           struct net_buf_simple *ad) {
     if (!azure_mqtt_is_connected()) {
@@ -761,6 +795,9 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 
 static struct bt_gatt_exchange_params mtu_params[MAX_CONN];
 
+/**
+ * @brief MTU exchange completion callback — logs the negotiated MTU.
+ */
 static void exchange_func(struct bt_conn *conn, uint8_t err,
                            struct bt_gatt_exchange_params *params) {
     if (err) { 
@@ -770,6 +807,13 @@ static void exchange_func(struct bt_conn *conn, uint8_t err,
     }
 }
 
+/**
+ * @brief BLE connection callback — exchanges MTU, schedules discovery,
+ * and restarts scanning.
+ *
+ * Rejects the connection if MQTT is not ready. Staggered discovery
+ * delays prevent concurrent GATT operations on dual connections.
+ */
 static void connected(struct bt_conn *conn, uint8_t err) {
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
@@ -817,6 +861,10 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 
 }
 
+/**
+ * @brief BLE disconnection callback — clears all per-slot state and
+ * handle cache for the dropped connection.
+ */
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
 
     int index = get_conn_index(conn);
@@ -846,9 +894,7 @@ static struct bt_conn_cb conn_callbacks = {
     .disconnected = disconnected,
 };
 
-/* ═══════════════════════════════════════════════════════════
- * process_data_thread
- * ═══════════════════════════════════════════════════════════ */
+/* -------------process_data_thread------------------- */
 
 #if defined(CONFIG_ESP_SPIRAM)
 #  define PROCESS_STACK_SIZE  6144
@@ -881,6 +927,14 @@ static char s_ds18b20_json[JSON_DS18B20_BUF_SIZE];
 
 static uint8_t sound_throttle = 0;
 
+/**
+ * @brief Data processing thread — dequeues modality messages, encodes
+ * JSON, and publishes via azure_mqtt_publish().
+ *
+ * Guards all publishing behind azure_mqtt_is_connected(); disconnects
+ * BLE nodes if MQTT drops. Also drives periodic time sync writes to
+ * all connected nodes at TIMESYNC_INTERVAL_S.
+ */
 void process_data_thread(void) {
     uint32_t last_timesync_ms = 0;
 
@@ -1013,6 +1067,10 @@ void process_data_thread(void) {
     }
 }
 
+/**
+ * @brief Base BLE thread — initialises work items, enables the BT stack,
+ * registers connection callbacks, and starts scanning.
+ */
 void base_thread(void) {
     /* Initialise work items before any connection can occur */
     for (int i = 0; i < MAX_CONN; i++) {

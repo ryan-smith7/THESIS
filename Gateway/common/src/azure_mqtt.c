@@ -1,11 +1,8 @@
 /*
- * azure_mqtt.c — MQTT client via Oracle plaintext bridge to Azure IoT Hub
+ * azure_mqtt.c — MQTT client to Oracle plaintext MQTT broker
  *
  * Single-threaded MQTT ownership — BLE thread queues messages via ring
- * buffer, azure_mqtt_thread dequeues and publishes. No fixed-slot waste.
- *
- * ESP32-WROOM workaround: BT + MbedTLS cannot coexist in 96KB dram1.
- * Production: ESP32-WROVER + direct TLS to Azure.
+ * buffer, azure_mqtt_thread dequeues and publishes. 
  */
 
 #include "azure_mqtt.h"
@@ -30,10 +27,6 @@ LOG_MODULE_REGISTER(azure_mqtt, LOG_LEVEL_INF);
 /* ── Ring buffer ─────────────────────────────────────────── */
 /*
  * Dynamic byte-level queue — each message prefixed with a 2-byte length
- * header so the consumer can read variable-length messages cleanly.
- *
- * 8KB covers ~40 env msgs (200B), ~16 spectrum msgs (400B), or any mix.
- *
  * WiFi build:    buffer in SPIRAM  (.ext_ram.bss)
  * Ethernet build: buffer in dram1  (.dram1.bss)
  */
@@ -65,11 +58,21 @@ static uint8_t payload_buf[MQTT_QUEUE_MAX_LEN];
 
 static bool connected = false;
 
+K_THREAD_STACK_DEFINE(azure_mqtt_stack, AZURE_MQTT_STACK);
+static struct k_thread azure_mqtt_tid;
+
+/**
+ * @brief Returns true if the MQTT client is currently connected.
+ */
 bool azure_mqtt_is_connected(void) {
     return connected;
 }
 
-/* ── Event handler ───────────────────────────────────────── */
+/**
+ * @brief MQTT event handler for connect, disconnect, puback, and pingresp.
+ *
+ * Sets or clears the connected flag on CONNACK/DISCONNECT events.
+ */
 static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt) {
 
     switch (evt->type) {
@@ -96,7 +99,12 @@ static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt) 
     }
 }
 
-/* ── Connect ─────────────────────────────────────────────── */
+/**
+ * @brief Resolve the broker address, initialise the MQTT client, and connect.
+ *
+ * Polls for CONNACK with a 5s timeout. Returns 0 on success or a
+ * negative errno on DNS failure, connect failure, or timeout.
+ */
 static int do_connect(void) {
 
     struct addrinfo *result;
@@ -176,12 +184,22 @@ static int do_connect(void) {
     return 0;
 }
 
+/**
+ * @brief Irrelevant Public wrapper around do_connect().
+ * 
+ * Should come back and remove 
+ */
 int azure_mqtt_connect(void) {
 
     return do_connect();
 }
 
-/* ── Publish (called from BLE thread — enqueues into ring buffer) ─────── */
+/**
+ * @brief Enqueue a JSON string into the ring buffer for publishing.
+ *
+ * Drops the message and returns -ENOMEM if the ring buffer is full,
+ * or -ENOTCONN if not connected.
+ */
 int azure_mqtt_publish(const char *json) {
 
     if (!connected) {
@@ -208,7 +226,12 @@ int azure_mqtt_publish(const char *json) {
     return 0;
 }
 
-/* ── Internal publish (called only from MQTT thread) ─────── */
+/**
+ * @brief Dequeue one message from the ring buffer and publish it.
+ *
+ * Must only be called from the MQTT thread. Clears connected on
+ * publish failure.
+ */
 static void do_publish(void) {
 
     k_mutex_lock(&mqtt_ring_mutex, K_FOREVER);
@@ -255,10 +278,13 @@ static void do_publish(void) {
     LOG_INF("Published %u bytes", msg_len);
 }
 
-/* ── Thread ──────────────────────────────────────────────── */
-K_THREAD_STACK_DEFINE(azure_mqtt_stack, AZURE_MQTT_STACK);
-static struct k_thread azure_mqtt_tid;
-
+/**
+ * @brief Main MQTT thread — connects, drains the ring buffer, and keeps alive.
+ *
+ * Initialises the ring buffer and mutex, then loops: waits for network
+ * readiness, reconnects as needed, publishes queued messages, and polls
+ * for incoming packets every 20 ms.
+ */
 void azure_mqtt_thread(void) {
 
     LOG_INF("azure_mqtt_thread started");
@@ -309,6 +335,9 @@ void azure_mqtt_thread(void) {
     }
 }
 
+/**
+ * @brief Spawn the azure_mqtt_thread as a named Zephyr thread.
+ */
 void azure_mqtt_thread_start(void) {
     k_thread_create(&azure_mqtt_tid,
                     azure_mqtt_stack,

@@ -1,20 +1,5 @@
 /*
  * sntp_sync.c — SNTP time synchronisation for BLE+Network Gateway
- *
- * Periodically queries pool.ntp.org and calls time_sync_writer_set_utc()
- * directly. time_sync_writer then distributes UTC to all connected sensor
- * nodes via GATT WRITE inside process_data_thread().
- *
- * There is no UART bridge and no 0xCC frame on either platform —
- * the UTC reference is set in-process.
- *
- * Platform notes:
- *   ESP32-POE  (CONFIG_ETH_GATEWAY=y, no SPIRAM):
- *     Thread stack stays in internal DRAM (K_THREAD_STACK_DEFINE).
- *
- *   ESP32-WROVER (CONFIG_ESP_SPIRAM=y):
- *     Thread stack is placed in SPIRAM to relieve pressure on the 96 KB
- *     internal DRAM shared with BT + MQTT stacks.
  */
 
 #include "sntp_sync.h"
@@ -39,12 +24,8 @@ LOG_MODULE_REGISTER(sntp_sync, LOG_LEVEL_INF);
 #define SNTP_STACK_SIZE  2048
 #define SNTP_PRIORITY    6
 
-
-
 /*
  * Stack placement: SPIRAM on WROVER, internal DRAM on POE.
- * Z_KERNEL_STACK_DEFINE_IN is a Zephyr internal macro; K_THREAD_STACK_DEFINE
- * is the public API and places the stack in internal DRAM by default.
  */
 #if defined(CONFIG_ESP_SPIRAM)
 Z_KERNEL_STACK_DEFINE_IN(sntp_stack, SNTP_STACK_SIZE,

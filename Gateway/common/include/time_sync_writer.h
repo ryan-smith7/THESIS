@@ -3,7 +3,7 @@
  * @brief Gateway-side: periodically writes UTC time to all connected sensor nodes.
  *
  * The gateway receives UTC from the WiFi board over UART as a dedicated
- * frame type (magic 0xCC). Once received it writes a TIMESYNC_PACKET to
+ * frame type (uses prefix 0xCC). Once received it writes a TIMESYNC_PACKET to
  * each connected node's writable characteristic every TIMESYNC_INTERVAL_S.
  */
 
@@ -14,37 +14,34 @@
 #include <zephyr/types.h>
 #include <zephyr/bluetooth/conn.h>
 
-#define TIMESYNC_MAGIC       0xFE
+#define TIMESYNC_PREFIX       0xFE
 #define TIMESYNC_PACKET_LEN  7     /* magic(1) + utc_sec(4) + utc_ms(2) */
 #define TIMESYNC_INTERVAL_S  30    /* sync every 30 seconds         */
 
-/* UART frame magic for UTC frames inbound from WiFi board */
-#define FRAME_MAGIC_UTC      0xCC
-#define FRAME_UTC_LEN        6     /* utc_sec(4) + utc_ms(2) — bytes after magic */
-
 /**
- * @brief Called from UART RX handler when a 0xCC UTC frame arrives.
- * Stores the UTC value (seconds + milliseconds) for distribution to nodes.
+ * @brief No-op stub kept for API compatibility with http_time_sync.c.
  *
- * @param utc_sec  UTC unix seconds received from WiFi board.
- * @param utc_ms   UTC sub-second milliseconds (0–999).
+ * UTC is sourced directly from http_time_get_utc() at send time rather
+ * than stored here.
  */
 void time_sync_writer_set_utc(uint32_t utc_sec, uint16_t utc_ms);
 
 /**
- * @brief Write current UTC time to a single connection.
- * Call this after subscribing to a node (inside sensor_cccd_disc_func)
- * for an immediate first sync, and periodically thereafter.
+ * @brief Write the current UTC to a sensor node via GATT WRITE.
  *
- * @param conn   Active BLE connection to write to
- * @param index  Connection index (for write_params_array slot)
- * @param char_handle  Value handle of the writable characteristic
+ * Reads UTC directly from http_time_get_utc() and encodes it into a
+ * TIMESYNC_PACKET_LEN byte packet prefixed with TIMESYNC_PREFIX.
+ * Returns immediately if UTC is not yet valid.
+ *
+ * @param conn        Connection to the target sensor node.
+ * @param index       Connection slot index (0..MAX_CONN-1).
+ * @param char_handle GATT characteristic handle to write to.
  */
 void time_sync_writer_send(struct bt_conn *conn, int index,
                            uint16_t char_handle);
 
 /**
- * @brief Check whether the gateway has a valid UTC reference.
+ * @brief Returns true if a valid UTC is available from http_time_get_utc().
  */
 bool time_sync_writer_has_utc(void);
 
