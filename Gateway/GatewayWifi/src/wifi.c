@@ -1,10 +1,3 @@
-/*
- * Copyright (c) 2017 ARM Ltd.
- * Copyright (c) 2016 Intel Corporation.
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
 #include <zephyr/kernel.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/wifi_mgmt.h>
@@ -35,10 +28,6 @@ static struct net_mgmt_event_callback scan_cb;
 static struct wifi_scan_result cached_ap = {0};
 static bool have_cached_ap = false;
 
-/* Retry thread — runs off event handler context */
-// Replace:
-// static K_THREAD_STACK_DEFINE(wifi_retry_stack, 2048);
-// With:
 static Z_KERNEL_STACK_DEFINE_IN(wifi_retry_stack, 2048,
     __attribute__((section(".ext_ram.bss"))));
     
@@ -46,14 +35,16 @@ static struct k_thread wifi_retry_thread_data;
 
 LOG_MODULE_REGISTER(wifi_module, LOG_LEVEL_INF);
 
-/* -------------------------------------------------------------------------
- * Scan callback — caches the target AP's current BSSID
- * ----------------------------------------------------------------------- */
 
+/**
+ * @brief Scan result callback — caches BSSID of the target AP.
+ *
+ * Stores the scan entry matching wifi_ssid so the BSSID can be
+ * locked at connect time to avoid iPhone hotspot MAC rotation.
+ */
 static void wifi_scan_result_cb(struct net_mgmt_event_callback *cb,
                                 uint64_t mgmt_event,
-                                struct net_if *iface)
-{
+                                struct net_if *iface) {
     if (mgmt_event != NET_EVENT_WIFI_SCAN_RESULT) {
         return;
     }
@@ -67,10 +58,12 @@ static void wifi_scan_result_cb(struct net_mgmt_event_callback *cb,
     }
 }
 
-/* -------------------------------------------------------------------------
- * Event handlers
- * ----------------------------------------------------------------------- */
-
+/**
+ * @brief Handle a WiFi connect result event.
+ *
+ * On success, resets the retry counter and signals wifi_connected.
+ * On failure, logs the error code.
+ */
 static void handle_wifi_connect_result(struct net_mgmt_event_callback *cb) {
     const struct wifi_status *status = (const struct wifi_status *)cb->info;
 
@@ -87,8 +80,13 @@ static void handle_wifi_connect_result(struct net_mgmt_event_callback *cb) {
 
 static void wifi_retry_thread_fn(void *a, void *b, void *c);
 
-static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb)
-{
+/**
+ * @brief Handle a WiFi disconnect event.
+ *
+ * Clears the connected and IPv4 state, then spawns a retry thread
+ * to reconnect off event-handler context.
+ */
+static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb) {
     const struct wifi_status *status = (const struct wifi_status *)cb->info;
 
     LOG_INF("WiFi disconnected (status=%d) — reconnecting", status->status);
@@ -103,8 +101,13 @@ static void handle_wifi_disconnect_result(struct net_mgmt_event_callback *cb)
                     K_PRIO_COOP(7), 0, K_NO_WAIT);
 }
 
-static void handle_ipv4_result(struct net_if *iface)
-{
+/**
+ * @brief Handle IPv4 address assignment events.
+ *
+ * Logs IP, subnet, and gateway on the first DHCP-assigned address
+ * and signals ipv4_address_obtained.
+ */
+static void handle_ipv4_result(struct net_if *iface) {
     if (got_ipv4) {
         return;
     }
@@ -135,11 +138,14 @@ static void handle_ipv4_result(struct net_if *iface)
     }
 }
 
-/* Zephyr 4.x: mgmt_event is uint64_t */
+/**
+ * @brief Top-level net-mgmt event dispatcher.
+ *
+ * Routes connect, disconnect, and IPv4 events to their handlers.
+ */
 static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
                                     uint64_t mgmt_event,
-                                    struct net_if *iface)
-{
+                                    struct net_if *iface) {
     if (mgmt_event == NET_EVENT_WIFI_CONNECT_RESULT) {
         handle_wifi_connect_result(cb);
     } else if (mgmt_event == NET_EVENT_WIFI_DISCONNECT_RESULT) {
@@ -151,12 +157,14 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
     }
 }
 
-/* -------------------------------------------------------------------------
- * Scan-then-connect — locks BSSID at last moment to avoid iPhone rotation
- * ----------------------------------------------------------------------- */
-
-void wifi_connect_with_bssid(void)
-{
+/**
+ * @brief Scan for the target AP, then connect with BSSID locked.
+ *
+ * Waits up to 5s for a scan result matching wifi_ssid. If found,
+ * the cached channel and BSSID are included in the connect request
+ * to pin the association to a specific AP.
+ */
+void wifi_connect_with_bssid(void) {
     struct net_if *iface = net_if_get_default();
 
     /* Register scan callback and trigger scan */
@@ -205,12 +213,13 @@ void wifi_connect_with_bssid(void)
     }
 }
 
-/* -------------------------------------------------------------------------
- * Retry thread — runs off event handler context with exponential backoff
- * ----------------------------------------------------------------------- */
-
-static void wifi_retry_thread_fn(void *a, void *b, void *c)
-{
+/**
+ * @brief Retry thread — reconnects with exponential backoff.
+ *
+ * Increments the global retry counter, waits 1s, then calls
+ * wifi_connect_with_bssid(). Runs off event-handler context.
+ */
+static void wifi_retry_thread_fn(void *a, void *b, void *c) {
     ARG_UNUSED(a);
     ARG_UNUSED(b);
     ARG_UNUSED(c);
@@ -225,12 +234,12 @@ static void wifi_retry_thread_fn(void *a, void *b, void *c)
     wifi_connect_with_bssid();
 }
 
-/* -------------------------------------------------------------------------
- * Public API
- * ----------------------------------------------------------------------- */
-
-void wifi_callbacks_init(void)
-{
+/**
+ * @brief Register all WiFi and IPv4 net-mgmt event callbacks.
+ *
+ * Must be called before the first connection attempt.
+ */
+void wifi_callbacks_init(void) {
     got_ipv4 = false;
 
     net_mgmt_init_event_callback(&wifi_cb,
@@ -249,8 +258,13 @@ void wifi_callbacks_init(void)
     net_mgmt_add_event_callback(&l4_cb);
 }
 
-void wifi_thread(void)
-{
+/**
+ * @brief Main WiFi management thread.
+ *
+ * Initialises callbacks, initiates the first connection, then blocks
+ * until both association and an IPv4 address are confirmed.
+ */
+void wifi_thread(void) {
     LOG_INF("WiFi thread started");
 
     wifi_callbacks_init();

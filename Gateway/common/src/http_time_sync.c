@@ -268,7 +268,6 @@ static int do_sntp_sync(uint32_t *utc_out, uint16_t *ms_out) {
     int64_t t2_utc = (int64_t)t2_sec * 1000 + t2_ms;
     int64_t t3_utc = (int64_t)t3_sec * 1000 + t3_ms;
     int64_t rtt    = t4 - t1;
-    int64_t rttpos    = t4 + t1;
 
     /* θ = ((t2 − t1) + (t3 − t4)) / 2 — equals UTC_ms − uptime_ms          */
     utc_offset_ms = ((t2_utc - t1) + (t3_utc - t4)) / 2;

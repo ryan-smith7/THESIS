@@ -7,8 +7,6 @@
 extern char wifi_ssid[MAX_SSID_LEN];
 extern char wifi_psk [MAX_PSK_LEN];
 
-void wifi_connection_retry_reset(void);
-void wifi_connect(void);
 void wifi_callbacks_init(void);
 void wifi_thread(void);
 

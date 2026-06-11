@@ -1,5 +1,7 @@
 /*
  * main.c — Combined BLE Central + Network + Azure IoT Hub Gateway
+ *   CONFIG_ETH_GATEWAY=y   →  ESP32-POE
+ *   CONFIG_ETH_GATEWAY=n   →  ESP32-WROVER (WiFi)
  */
 
 #include <zephyr/kernel.h>
