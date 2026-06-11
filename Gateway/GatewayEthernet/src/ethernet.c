@@ -29,6 +29,12 @@ static char ip_addr_str[NET_IPV4_ADDR_LEN];
 
 static struct net_mgmt_event_callback eth_cb;
 
+/**
+ * @brief Net-mgmt event handler for Ethernet link and IPv4 events.
+ *
+ * Logs link state changes. On IF_DOWN or IPV4_ADDR_DEL, clears the
+ * ready flag and signals the watchdog loop via eth_lost_sem.
+ */
 static void eth_event_handler(struct net_mgmt_event_callback *cb,
                               uint64_t event,
                               struct net_if *iface) {
@@ -70,6 +76,12 @@ static void eth_event_handler(struct net_mgmt_event_callback *cb,
 
 static struct net_if *carrier_poll_iface;
 
+/**
+ * @brief Background thread polling the interface operational state.
+ *
+ * Checks the link every 2 s and signals eth_lost_sem on an up-to-down
+ * transition; acting as a fallback for missed net-mgmt events.
+ */
 static void carrier_poll_thread(void *a, void *b, void *c) {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 
@@ -101,6 +113,13 @@ K_THREAD_DEFINE(carrier_poll_tid, 1024, carrier_poll_thread,
 
 /* ── Acquisition routine ──*/
 
+/**
+ * @brief Start DHCP on the interface and block until a lease is held.
+ *
+ * Polls every 3 s for a non-zero IPv4 address, then logs the IP,
+ * gateway, and netmask, sets the ready flag, and wakes waiters on
+ * eth_ready_sem.
+ */
 static void dhcp_acquire(struct net_if *iface) {
     net_dhcpv4_start(iface);
     LOG_INF("DHCP started — polling for lease...");
@@ -134,7 +153,12 @@ static void dhcp_acquire(struct net_if *iface) {
 }
 
 
-/* Block until Ethernet has an IPv4 address.*/
+/**
+ * @brief Block until Ethernet has an IPv4 address or the timeout expires.
+ *
+ * @param timeout Maximum time to wait.
+ * @return true if Ethernet is ready, false on timeout.
+ */
 bool ethernet_wait_ready(k_timeout_t timeout) {
     if (eth_ready_flag) {
         return true;
@@ -151,10 +175,22 @@ bool ethernet_wait_ready(k_timeout_t timeout) {
     return eth_ready_flag;
 }
 
+/**
+ * @brief Gets Ethernet readiness flag
+ *
+ * @return true if the interface currently holds an IPv4 address.
+ */
 bool ethernet_is_ready(void) {
     return eth_ready_flag;
 }
 
+/**
+ * @brief Main Ethernet management thread.
+ *
+ * Registers event callbacks, brings the interface up, performs the
+ * initial DHCP acquisition, then loops as a watchdog: on connectivity
+ * loss, waits for the link to return and re-acquires DHCP.
+ */
 void ethernet_thread(void) {
 
     LOG_INF("ethernet_thread: starting (watchdog + carrier poll)");

@@ -1,6 +1,6 @@
 # GatewayEthernet — Build Commands
 
-## Set up the Zephyr environment in the `~/csse4011` folder:
+## Set up the Zephyr environment in the folder:
 
 ```bash
 source $HOME/zephyr_install/env/bin/activate
@@ -37,12 +37,6 @@ screen ----- 115200
 
 ```bash
 rm -rf build
-```
-
-## Check autoconf.h for a symbol
-
-```bash
-grep "ETH_GATEWAY" build/zephyr/include/generated/zephyr/autoconf.h
 ```
 
 ## RAM usage report (requires successful link)
